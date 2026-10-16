@@ -74,6 +74,8 @@ class PlacedComponent:
     value: str = ""
     spice_line: Optional[str] = None
     prefix: Optional[str] = None
+    extra_attrs: Dict[str, str] = field(default_factory=dict)
+    custom_windows: List[str] = field(default_factory=list)
 
     def pin(self, pin_name: str) -> Point:
         """Return the absolute `(x, y)` grid coordinates of `pin_name`."""
@@ -92,6 +94,8 @@ class PlacedComponent:
     def unique_pin_points(self) -> List[Point]:
         """Return deduplicated absolute coordinates of all physical pins of this component."""
         key = (self.symbol_type.lower(), self.orientation.upper())
+        if key not in SYMBOL_PIN_OFFSETS:
+            return []
         pin_map = SYMBOL_PIN_OFFSETS[key]
         pts = {(self.x + dx, self.y + dy) for (dx, dy) in pin_map.values()}
         return sorted(pts)
@@ -117,11 +121,17 @@ class SpiceDirectiveText:
     x: int
     y: Optional[int]
     directive: str
+    is_comment: bool = False
 
 
 class SchematicBuilder:
     """
     Declarative 16-pixel grid schematic compiler for LTspice `.asc` files.
+    Includes automatic engine-level visual sanitization (`sanitize_visual_layout`) so that:
+    1. Net labels (`FLAG`) never sit on vertical-only pins where LTspice would rotate them 90 deg vertically.
+    2. Ground symbols (`FLAG 0`) never sit directly on a bottom component pin where they would overlap value text.
+    3. SPICE directives (`.tran`, `.meas`, `.model`, `.include`) are always placed in a clean footer >=160px
+       below the lowest circuit element, spaced 48px apart vertically.
     """
 
     def __init__(self, width: int = 1200, height: int = 800):
@@ -149,18 +159,19 @@ class SchematicBuilder:
         orientation: str = "R0",
         spice_line: Optional[str] = None,
         prefix: Optional[str] = None,
+        allow_custom_symbol: bool = False,
     ) -> PlacedComponent:
         """Place a component at grid coordinates `(x, y)`."""
         self.assert_on_grid(x, y, f"component '{inst_name}'")
         key = (symbol_type.lower(), orientation.upper())
-        if key not in SYMBOL_PIN_OFFSETS:
+        if not allow_custom_symbol and key not in SYMBOL_PIN_OFFSETS:
             raise ValueError(f"Unsupported symbol/orientation: {key}")
         if inst_name in self.components:
             raise ValueError(f"Duplicate component instance name: '{inst_name}'")
 
         comp = PlacedComponent(
             inst_name=inst_name,
-            symbol_type=symbol_type.lower(),
+            symbol_type=symbol_type if allow_custom_symbol else symbol_type.lower(),
             x=x,
             y=y,
             orientation=orientation.upper(),
@@ -181,7 +192,9 @@ class SchematicBuilder:
             raise ValueError(
                 f"Diagonal wire ({x1},{y1})->({x2},{y2}) is forbidden. Use Manhattan routing (`connect_points`)."
             )
-        self.wires.append(WireSegment(x1, y1, x2, y2))
+        seg = WireSegment(x1, y1, x2, y2)
+        if seg not in self.wires and WireSegment(x2, y2, x1, y1) not in self.wires:
+            self.wires.append(seg)
 
     def connect_points(self, p1: Point, p2: Point, vh_order: str = "HV") -> None:
         """
@@ -225,16 +238,102 @@ class SchematicBuilder:
         """
         self.add_flag(pt, net_name, stub_dx=stub_dx, stub_dy=stub_dy)
 
-    def add_directive(self, directive: str, x: int = 64, y: Optional[int] = None) -> None:
+    def add_directive(self, directive: str, x: int = 64, y: Optional[int] = None, is_comment: bool = False) -> None:
         """
-        Add a SPICE directive (`.tran`, `.ac`, `.meas`, `.include`, `.model`, `.step`) to the sheet.
+        Add a SPICE directive (`.tran`, `.ac`, `.meas`, `.include`, `.model`, `.step`) or comment to the sheet.
         When `y=None` (default), `to_asc_string()` automatically places all directives in a clean footer
         at least 160 pixels below the lowest circuit element, spaced 48 pixels apart vertically.
         """
         clean = directive.strip()
-        if not clean.startswith("!"):
-            clean = "!" + clean
-        self.directives.append(SpiceDirectiveText(x=x, y=y, directive=clean))
+        if is_comment:
+            if not clean.startswith(";"):
+                clean = ";" + clean.lstrip("!;")
+        else:
+            if not clean.startswith("!") and not clean.startswith(";"):
+                clean = "!" + clean
+        self.directives.append(SpiceDirectiveText(x=x, y=y, directive=clean, is_comment=is_comment))
+
+    def _point_on_horizontal_wire(self, x: int, y: int) -> bool:
+        for w in self.wires:
+            if w.y1 == w.y2 == y and min(w.x1, w.x2) <= x <= max(w.x1, w.x2):
+                return True
+        return False
+
+    def _point_on_vertical_wire(self, x: int, y: int) -> bool:
+        for w in self.wires:
+            if w.x1 == w.x2 == x and min(w.y1, w.y2) <= y <= max(w.y1, w.y2):
+                return True
+        return False
+
+    def _classify_pin_at(self, pt: Point) -> Optional[str]:
+        """Return `'top'`, `'bot'`, `'left'`, or `'right'` if `pt` is a component pin."""
+        for comp in self.components.values():
+            key = (comp.symbol_type.lower(), comp.orientation.upper())
+            if key not in SYMBOL_PIN_OFFSETS:
+                continue
+            pin_map = SYMBOL_PIN_OFFSETS[key]
+            for pname, (dx, dy) in pin_map.items():
+                if (comp.x + dx, comp.y + dy) == pt:
+                    if pname in ("top", "C", "col") or (comp.orientation == "R0" and pname in ("1", "+", "A")):
+                        return "top"
+                    if pname in ("bot", "E", "emit") or (comp.orientation == "R0" and pname in ("2", "-", "K")):
+                        return "bot"
+                    if pname in ("B", "base", "left") or (comp.orientation == "R90" and pname in ("2", "K")):
+                        return "left"
+                    return "right"
+        return None
+
+    def sanitize_visual_layout(self) -> None:
+        """
+        Engine-level visual layout sanitizer:
+        1. Converts any net `FLAG` sitting directly on a vertical pin (`top`/`bot`/`C`/`E`) or vertical-only
+           wire endpoint into a horizontal flag tab so LTspice renders 100% of net labels horizontally (`0 deg`).
+        2. Adds a `32 px` vertical wire stub to any Ground (`FLAG 0`) sitting directly on a bottom component pin.
+        """
+        all_occupied_pts = {pt for c in self.components.values() for pt in c.unique_pin_points()}
+
+        for fl in self.flags:
+            x, y = fl.x, fl.y
+            pin_dir = self._classify_pin_at((x, y))
+            on_h = self._point_on_horizontal_wire(x, y)
+            on_v = self._point_on_vertical_wire(x, y)
+
+            if fl.net_name == "0":
+                # If ground is glued directly to a bottom pin with no wire stub, drop it 32px down
+                if pin_dir == "bot" and not on_v and (x, y + 32) not in all_occupied_pts:
+                    self.add_wire(x, y, x, y + 32)
+                    fl.y = y + 32
+                continue
+
+            if on_h:
+                # Already on a horizontal wire segment -> LTspice renders this label horizontally!
+                continue
+
+            if pin_dir == "top" and not on_v:
+                ny = max(16, y - 32)
+                nx = x + 32
+                if (x, ny) not in all_occupied_pts and (nx, ny) not in all_occupied_pts:
+                    self.add_wire(x, y, x, ny)
+                    self.add_wire(x, ny, nx, ny)
+                    fl.x, fl.y = nx, ny
+            elif pin_dir == "bot" and not on_v:
+                ny = y + 32
+                nx = x + 32
+                if (x, ny) not in all_occupied_pts and (nx, ny) not in all_occupied_pts:
+                    self.add_wire(x, y, x, ny)
+                    self.add_wire(x, ny, nx, ny)
+                    fl.x, fl.y = nx, ny
+            elif pin_dir == "left" and not on_h:
+                nx = max(16, x - 32)
+                if (nx, y) not in all_occupied_pts:
+                    self.add_wire(x, y, nx, y)
+                    fl.x = nx
+            elif on_v and not on_h and pin_dir is None:
+                # Endpoint of a vertical wire stub -> add a 32px horizontal tab
+                nx = x + 32
+                if (nx, y) not in all_occupied_pts:
+                    self.add_wire(x, y, nx, y)
+                    fl.x = nx
 
     def get_circuit_bounds(self) -> Tuple[int, int, int, int]:
         """Return `(min_x, min_y, max_x, max_y)` across all placed components, wires, and flags."""
@@ -279,15 +378,23 @@ class SchematicBuilder:
                     )
         return issues
 
-    def to_asc_string(self) -> str:
-        """Render the complete LTspice Version 4 `.asc` file content with automatic directive footer spacing."""
+    def to_asc_string(self, auto_sanitize: bool = True) -> str:
+        """
+        Render the complete LTspice Version 4 `.asc` file content with automatic visual sanitization
+        and directive footer spacing (`>= 160 px` below the lowest circuit element).
+        """
+        if auto_sanitize:
+            self.sanitize_visual_layout()
+
         _, _, max_x, max_y = self.get_circuit_bounds()
-        auto_y = ((max_y + 160) // 16) * 16
+        min_safe_directive_y = ((max_y + 160) // 16) * 16
+        auto_y = min_safe_directive_y
 
         resolved_directives: List[Tuple[int, int, str]] = []
         for d in self.directives:
-            if d.y is not None:
+            if d.y is not None and d.y >= min_safe_directive_y:
                 dy = d.y
+                auto_y = max(auto_y, dy + 48)
             else:
                 dy = auto_y
                 auto_y += 48  # Generous 48px vertical pitch between .tran/.meas/.model lines
@@ -306,27 +413,34 @@ class SchematicBuilder:
             lines.append(f"FLAG {fl.x} {fl.y} {fl.net_name}")
         for comp in self.components.values():
             lines.append(f"SYMBOL {comp.symbol_type} {comp.x} {comp.y} {comp.orientation}")
-            if comp.orientation == "R90" and comp.symbol_type in ("res", "ind"):
-                lines.append("WINDOW 0 0 56 VBottom 2")
-                lines.append("WINDOW 3 32 56 VTop 2")
-            elif comp.orientation == "R90" and comp.symbol_type == "cap":
-                lines.append("WINDOW 0 0 32 VBottom 2")
-                lines.append("WINDOW 3 32 32 VTop 2")
-            elif comp.symbol_type == "voltage":
-                lines.append("WINDOW 3 24 96 Left 2")
+            if comp.custom_windows:
+                for win_line in comp.custom_windows:
+                    lines.append(win_line)
+            else:
+                if comp.orientation == "R90" and comp.symbol_type in ("res", "ind"):
+                    lines.append("WINDOW 0 0 56 VBottom 2")
+                    lines.append("WINDOW 3 32 56 VTop 2")
+                elif comp.orientation == "R90" and comp.symbol_type == "cap":
+                    lines.append("WINDOW 0 0 32 VBottom 2")
+                    lines.append("WINDOW 3 32 32 VTop 2")
+                elif comp.symbol_type == "voltage":
+                    lines.append("WINDOW 3 24 96 Left 2")
             lines.append(f"SYMATTR InstName {comp.inst_name}")
-            lines.append(f"SYMATTR Value {comp.value}")
+            if comp.value != "":
+                lines.append(f"SYMATTR Value {comp.value}")
             if comp.prefix:
                 lines.append(f"SYMATTR Prefix {comp.prefix}")
             if comp.spice_line:
                 lines.append(f"SYMATTR SpiceLine {comp.spice_line}")
+            for attr_k, attr_v in comp.extra_attrs.items():
+                lines.append(f"SYMATTR {attr_k} {attr_v}")
         for dx, dy, text_cmd in resolved_directives:
             lines.append(f"TEXT {dx} {dy} Left 2 {text_cmd}")
         return "\n".join(lines) + "\n"
 
-    def save(self, asc_path: str) -> str:
+    def save(self, asc_path: str, auto_sanitize: bool = True) -> str:
         """Write the `.asc` file to disk."""
-        content = self.to_asc_string()
+        content = self.to_asc_string(auto_sanitize=auto_sanitize)
         with open(asc_path, "w", encoding="utf-8") as f:
             f.write(content)
         return asc_path

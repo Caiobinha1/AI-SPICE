@@ -128,6 +128,31 @@ def cmd_import_vision(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_inspect(args: argparse.Namespace) -> int:
+    import dataclasses
+    from .ltspice_project import inspect_ltspice_project
+
+    rep = inspect_ltspice_project(args.path)
+    print(json.dumps(dataclasses.asdict(rep), indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_beautify_asc(args: argparse.Namespace) -> int:
+    from .ltspice_project import beautify_asc_file
+
+    _, fixes = beautify_asc_file(args.asc, output_path=args.out)
+    print(json.dumps({"asc": args.out or args.asc, "fixes_applied": fixes}, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_netlist_to_asc(args: argparse.Namespace) -> int:
+    from .ltspice_project import compile_netlist_to_asc
+
+    compile_netlist_to_asc(args.netlist, args.out, style=args.style)
+    print(json.dumps({"netlist": args.netlist, "output_asc": args.out, "style": args.style}, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ia-spice",
@@ -159,6 +184,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_vis.add_argument("--out-cir", default=None, help="Output .cir file path (in autonomous mode)")
     p_vis.add_argument("--out-asc", default=None, help="Output .asc file path (in autonomous mode)")
     p_vis.set_defaults(func=cmd_import_vision)
+
+    p_insp = sub.add_parser("inspect", help="Inspect an LTspice file (.asc/.cir/.net/.sub/.lib/.asy/.plt/.log) or folder")
+    p_insp.add_argument("path", help="Path to LTspice file or project directory")
+    p_insp.set_defaults(func=cmd_inspect)
+
+    p_beau = sub.add_parser("beautify-asc", help="Auto-fix overlapping .tran/.meas directives and vertical flags in an .asc file")
+    p_beau.add_argument("asc", help="Path to input .asc file")
+    p_beau.add_argument("--out", default=None, help="Optional output .asc path")
+    p_beau.set_defaults(func=cmd_beautify_asc)
+
+    p_nta = sub.add_parser("netlist-to-asc", help="Compile a .cir/.net netlist into a clean .asc schematic")
+    p_nta.add_argument("netlist", help="Path to input .cir or .net file")
+    p_nta.add_argument("out", help="Path to output .asc file")
+    p_nta.add_argument("--style", default="A_textbook_wired", choices=["A_textbook_wired", "B_power_rail_bus", "C_modular_blocks"])
+    p_nta.set_defaults(func=cmd_netlist_to_asc)
 
     return parser
 

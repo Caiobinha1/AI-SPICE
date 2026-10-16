@@ -85,3 +85,18 @@ When the user sends a photo, screenshot, or hand-drawn sketch of a schematic:
      - And asks the user: **(1) Do you want to provide the exact values, or (2) Should I size and choose them autonomously?**
 3. **Step 3 — Resolution, `.asc` Compilation & Verification**:
    - Once the user provides the values (passed via `user_overrides`) or authorizes autonomous sizing (`mode="autonomous"`), call `resolve_and_compile_vision_graph` to generate the `.cir` netlist and the 16-pixel grid `.asc` schematic, verify `NC_ = 0` via `verify_asc_netlist`, and simulate in LTspice.
+
+---
+
+## 🛠️ Special Workflow: Reading, Troubleshooting, and Modifying Existing LTspice Projects (`ia_spice.ltspice_project`)
+
+When the user provides an existing LTspice file or project directory (`.asc`, `.cir`, `.net`, `.sub`, `.lib`, `.asy`, `.plt`, `.log`):
+
+1. **Inspect & Diagnose (`inspect_ltspice_project` / `ia-spice inspect`)**:
+   - Audits all files in the directory for unconnected pins (`NC_`), missing `.include`/`.lib` libraries, failed `.meas` statements in `.log`, and visual layout overlaps in `.asc` schematics.
+2. **Modify or Add Components (`modify_asc_component`, `add_component_to_asc`, `parse_spice_netlist`)**:
+   - Change component values (optionally snapping to `E12`/`E24`/`E96`) or inject new components (`res`, `cap`, `ind`, `npn`, `diode`) directly into an `.asc` schematic or `.cir` netlist; new components are automatically placed in a free 16px-grid column (`max_x + 224`) with horizontal flag tabs.
+3. **Beautify & Auto-Layout (`beautify_asc_file`, `compile_netlist_to_asc`)**:
+   - `beautify_asc_file` fixes legacy `.asc` schematics by converting vertical colliding flags into horizontal flag tabs, dropping ground symbols on `32 px` vertical stubs, and pushing `.tran`/`.meas` directives `>= 160 px` below the circuit.
+   - `compile_netlist_to_asc` compiles any `.cir`/`.net` into a clean `.asc` using `style="A_textbook_wired"`, `style="B_power_rail_bus"`, or `style="C_modular_blocks"`.
+

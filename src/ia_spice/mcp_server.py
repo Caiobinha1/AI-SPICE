@@ -125,11 +125,95 @@ MCP_TOOLS: List[Dict[str, Any]] = [
             "required": ["title", "components"],
         },
     },
+    {
+        "name": "ia_spice_edit_ltspice_project",
+        "description": "Inspect, beautify, modify component values, add components, or compile netlist-to-asc across existing LTspice project files (.asc, .cir, .net, .sub, .lib, .asy, .plt, .log).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["inspect", "beautify_asc", "modify_component", "add_component", "netlist_to_asc"],
+                },
+                "target_path": {"type": "string"},
+                "output_path": {"type": "string"},
+                "inst_name": {"type": "string"},
+                "symbol_type": {"type": "string"},
+                "value": {"type": "string"},
+                "nodes": {"type": "array", "items": {"type": "string"}},
+                "snap_series": {"type": "string", "enum": ["E12", "E24", "E96"]},
+                "style": {
+                    "type": "string",
+                    "enum": ["A_textbook_wired", "B_power_rail_bus", "C_modular_blocks"],
+                    "default": "A_textbook_wired",
+                },
+            },
+            "required": ["action", "target_path"],
+        },
+    },
 ]
 
 
 def dispatch_tool_call(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     """Execute an MCP tool call and return a JSON-serializable dictionary."""
+    if name == "ia_spice_edit_ltspice_project":
+        from .ltspice_project import (
+            add_component_to_asc,
+            beautify_asc_file,
+            compile_netlist_to_asc,
+            inspect_ltspice_project,
+            modify_asc_component,
+            parse_spice_netlist,
+        )
+
+        act = str(args["action"])
+        tpath = str(args["target_path"])
+        opath = args.get("output_path")
+
+        if act == "inspect":
+            return dataclasses.asdict(inspect_ltspice_project(tpath))
+        if act == "beautify_asc":
+            _, fixes = beautify_asc_file(tpath, output_path=opath)
+            return {"output_path": opath or tpath, "fixes_applied": fixes}
+        if act == "modify_component":
+            if tpath.lower().endswith(".asc"):
+                modify_asc_component(
+                    tpath,
+                    inst_name=str(args["inst_name"]),
+                    new_value=str(args["value"]),
+                    snap_series=args.get("snap_series"),
+                    output_path=opath,
+                )
+            else:
+                proj = parse_spice_netlist(tpath)
+                proj.modify_component_value(
+                    str(args["inst_name"]),
+                    str(args["value"]),
+                    snap_series=args.get("snap_series"),
+                )
+                proj.save(opath or tpath)
+            return {"status": "modified", "output_path": opath or tpath, "inst_name": args["inst_name"]}
+        if act == "add_component":
+            if tpath.lower().endswith(".asc"):
+                add_component_to_asc(
+                    tpath,
+                    inst_name=str(args["inst_name"]),
+                    symbol_type=str(args.get("symbol_type", "res")),
+                    value=str(args["value"]),
+                    nodes=list(args["nodes"]),
+                    output_path=opath,
+                )
+            else:
+                proj = parse_spice_netlist(tpath)
+                proj.add_component(str(args["inst_name"]), list(args["nodes"]), str(args["value"]))
+                proj.save(opath or tpath)
+            return {"status": "added", "output_path": opath or tpath, "inst_name": args["inst_name"]}
+        if act == "netlist_to_asc":
+            style = str(args.get("style", "A_textbook_wired"))
+            out_asc = str(opath or (tpath.rsplit(".", 1)[0] + ".asc"))
+            compile_netlist_to_asc(tpath, out_asc, style=style)
+            return {"status": "compiled", "output_asc": out_asc, "style": style}
+
     if name == "ia_spice_import_vision_graph":
         from .vision_to_spice import (
             ExtractedComponent,
