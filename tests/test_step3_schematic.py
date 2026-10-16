@@ -31,20 +31,28 @@ class TestStep3SchematicCompilerAndVerifier(unittest.TestCase):
         with self.assertRaises(ValueError):
             sch.add_component("R1", "res", x=100, y=100, value="1k")  # 100 is not divisible by 16
 
+    def test_crowded_components_and_directive_footer_clearance(self):
+        sch = SchematicBuilder()
+        sch.add_component("R1", "res", x=160, y=160, value="1k")
+        sch.add_component("R2", "res", x=208, y=192, value="2k")  # dx=48 < 96, dy=32 < 112 -> crowded!
+        issues = sch.run_geometric_drc()
+        self.assertEqual(len(issues), 1)
+        self.assertIn("Crowded components", issues[0])
+
     def test_build_verify_and_simulate_bjt_emitter_follower_asc(self):
         sch = SchematicBuilder(width=960, height=640)
 
-        # Place components on 16-pixel grid
-        vcc = sch.add_component("VCC", "voltage", x=560, y=208, value="9")
+        # Place components on 16-pixel grid with >=128px spacing
+        vcc = sch.add_component("VCC", "voltage", x=704, y=208, value="9")
         vin = sch.add_component("VAUDIO", "voltage", x=48, y=256, value="SINE(0 0.14 1k)")
-        cin = sch.add_component("C_IN", "cap", x=160, y=288, value="1u", orientation="R90")
-        rb1 = sch.add_component("RB1", "res", x=224, y=128, value="43k")
-        rb2 = sch.add_component("RB2", "res", x=224, y=336, value="52k")
-        q4 = sch.add_component("Q4", "npn", x=336, y=256, value="2N2222")
-        re4 = sch.add_component("RE4", "res", x=384, y=400, value="3.9k")
+        cin = sch.add_component("C_IN", "cap", x=208, y=288, value="1u", orientation="R90")
+        rb1 = sch.add_component("RB1", "res", x=336, y=128, value="43k")
+        rb2 = sch.add_component("RB2", "res", x=336, y=352, value="52k")
+        q4 = sch.add_component("Q4", "npn", x=480, y=256, value="2N2222")
+        re4 = sch.add_component("RE4", "res", x=528, y=400, value="3.9k")
 
         # Power and Ground flags
-        sch.add_flag(vcc.pin("top"), "VCC_RAIL")
+        sch.power_pin(vcc.pin("top"), "VCC_RAIL")
         sch.ground_pin(vcc.pin("bot"))
 
         # Input source -> C_IN -> Base node B4
@@ -52,20 +60,20 @@ class TestStep3SchematicCompilerAndVerifier(unittest.TestCase):
         sch.ground_pin(vin.pin("bot"))
         sch.connect_points((48, 256), cin.pin("left"), vh_order="VH")
 
-        # Base node B4 at (240, 304)
-        b4_pt = q4.pin("B")  # (336, 304)
+        # Base node B4 at (352, 304)
+        b4_pt = q4.pin("B")  # (480, 304)
         sch.connect_points(cin.pin("right"), b4_pt)
-        sch.add_flag((240, 304), "B4")
+        sch.add_flag((416, 304), "B4")
 
         # Bias resistors RB1 (to VCC_RAIL) and RB2 (to GND)
-        sch.add_flag(rb1.pin("top"), "VCC_RAIL")
-        sch.connect_points(rb1.pin("bot"), (240, 304))
-        sch.connect_points((240, 304), rb2.pin("top"))
+        sch.power_pin(rb1.pin("top"), "VCC_RAIL")
+        sch.connect_points(rb1.pin("bot"), (352, 304))
+        sch.connect_points((352, 304), rb2.pin("top"))
         sch.ground_pin(rb2.pin("bot"))
 
         # Q4 Collector to VCC_RAIL, Emitter to CTRL and RE4
-        sch.add_flag(q4.pin("C"), "VCC_RAIL")
-        sch.add_flag(q4.pin("E"), "CTRL")
+        sch.power_pin(q4.pin("C"), "VCC_RAIL")
+        sch.add_flag(q4.pin("E"), "CTRL", stub_dx=32)
         sch.connect_points(q4.pin("E"), re4.pin("top"))
         sch.ground_pin(re4.pin("bot"))
 

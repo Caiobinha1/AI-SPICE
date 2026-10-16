@@ -38,23 +38,26 @@ def run_demo1(output_dir: str) -> dict:
     r_p = (xl_f0 ** 2) / r_ser  # Parallel tank equivalent resistance (~8.33 kOhm)
     vmax_analytical = r_p / (r_s + r_p)  # ~0.8929 V/V
 
-    # 2. Build 16px Grid .asc Schematic
-    sch = SchematicBuilder(width=800, height=560)
+    # 2. Build 16px Grid .asc Schematic with Generous Spacing & Horizontal Flags
+    sch = SchematicBuilder(width=960, height=720)
     vin = sch.add_component("VIN", "voltage", x=64, y=192, value="AC 1")
-    rs = sch.add_component("RS", "res", x=224, y=192, value=format_spice_value(r_s), orientation="R90")
-    l1 = sch.add_component("L1", "ind", x=304, y=224, value=format_spice_value(l_val), orientation="R0", spice_line=f"Rser={r_ser}")
-    c1 = sch.add_component("C1", "cap", x=416, y=240, value=format_spice_value(c_val), orientation="R0")
+    rs = sch.add_component("RS", "res", x=304, y=144, value=format_spice_value(r_s), orientation="R90")
+    l1 = sch.add_component("L1", "ind", x=448, y=208, value=format_spice_value(l_val), orientation="R0", spice_line=f"Rser={r_ser}")
+    c1 = sch.add_component("C1", "cap", x=624, y=224, value=format_spice_value(c_val), orientation="R0")
 
-    sch.add_flag(vin.pin("top"), "IN")
-    sch.ground_pin(vin.pin("bot"))
-    sch.connect_points(vin.pin("top"), rs.pin("left"))
+    sch.connect_points(vin.pin("top"), (64, 160), vh_order="VH")
+    sch.connect_points((64, 160), rs.pin("left"), vh_order="HV")
+    sch.add_flag((128, 160), "IN")
+    sch.ground_pin(vin.pin("bot"), stub_dy=32)
 
-    sch.add_flag(rs.pin("right"), "OUT")
-    sch.connect_points(rs.pin("right"), l1.pin("top"))
-    sch.ground_pin(l1.pin("bot"))
+    sch.connect_points(rs.pin("right"), (464, 160), vh_order="HV")
+    sch.connect_points((464, 160), l1.pin("top"), vh_order="VH")
+    sch.ground_pin(l1.pin("bot"), stub_dy=32)
 
-    sch.connect_points(l1.pin("top"), c1.pin("top"))
-    sch.ground_pin(c1.pin("bot"))
+    sch.connect_points((464, 160), (640, 160), vh_order="HV")
+    sch.connect_points((640, 160), c1.pin("top"), vh_order="VH")
+    sch.add_flag((544, 160), "OUT")
+    sch.ground_pin(c1.pin("bot"), stub_dy=48)
 
     sch.add_directive(".ac dec 500 100k 10Meg")
     sch.add_directive(".meas ac VMAX MAX mag(V(OUT))")

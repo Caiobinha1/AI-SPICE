@@ -115,7 +115,7 @@ class FlagLabel:
 @dataclass
 class SpiceDirectiveText:
     x: int
-    y: int
+    y: Optional[int]
     directive: str
 
 
@@ -131,7 +131,6 @@ class SchematicBuilder:
         self.wires: List[WireSegment] = []
         self.flags: List[FlagLabel] = []
         self.directives: List[SpiceDirectiveText] = []
-        self._next_directive_y: int = height - 160
 
     @staticmethod
     def assert_on_grid(x: int, y: int, context: str = "") -> None:
@@ -184,7 +183,7 @@ class SchematicBuilder:
             )
         self.wires.append(WireSegment(x1, y1, x2, y2))
 
-    def connect_points(self, p1: Point, p2: Point,vh_order: str = "HV") -> None:
+    def connect_points(self, p1: Point, p2: Point, vh_order: str = "HV") -> None:
         """
         Connect two grid points `p1` and `p2` using 1 or 2 orthogonal wire segments.
         `vh_order="HV"` routes horizontally first, then vertically; `"VH"` routes vertically first.
@@ -206,44 +205,100 @@ class SchematicBuilder:
         self.assert_on_grid(x, y, f"flag '{net_name}'")
         if stub_dx != 0 or stub_dy != 0:
             fx, fy = x + stub_dx, y + stub_dy
-            self.connect_points((x, y), (fx, fy))
+            self.connect_points((x, y), (fx, fy), vh_order="VH" if stub_dy != 0 else "HV")
             self.flags.append(FlagLabel(fx, fy, net_name))
         else:
             self.flags.append(FlagLabel(x, y, net_name))
 
-    def ground_pin(self, pt: Point, stub_dy: int = 0) -> None:
-        """Attach LTspice Ground (`FLAG 0`) to a component pin."""
+    def ground_pin(self, pt: Point, stub_dy: int = 32) -> None:
+        """
+        Attach LTspice Ground (`FLAG 0`) to a component pin via a clean vertical wire stub
+        (`stub_dy=32` by default so the GND triangle never collides with component value labels).
+        """
         self.add_flag(pt, "0", stub_dy=stub_dy)
 
+    def power_pin(self, pt: Point, net_name: str = "VCC", stub_dy: int = -32, stub_dx: int = 32) -> None:
+        """
+        Attach a supply rail label (`VCC`, `VCC_12V`, etc.) above a top pin using a vertical rise
+        (`stub_dy=-32`) and a short horizontal tab (`stub_dx=32`) so LTspice renders the label
+        horizontally instead of vertically.
+        """
+        self.add_flag(pt, net_name, stub_dx=stub_dx, stub_dy=stub_dy)
+
     def add_directive(self, directive: str, x: int = 64, y: Optional[int] = None) -> None:
-        """Add a SPICE directive (`.tran`, `.ac`, `.meas`, `.include`, `.model`, `.step`) to the sheet."""
+        """
+        Add a SPICE directive (`.tran`, `.ac`, `.meas`, `.include`, `.model`, `.step`) to the sheet.
+        When `y=None` (default), `to_asc_string()` automatically places all directives in a clean footer
+        at least 160 pixels below the lowest circuit element, spaced 48 pixels apart vertically.
+        """
         clean = directive.strip()
         if not clean.startswith("!"):
             clean = "!" + clean
-        if y is None:
-            y = self._next_directive_y
-            self._next_directive_y += 32
         self.directives.append(SpiceDirectiveText(x=x, y=y, directive=clean))
+
+    def get_circuit_bounds(self) -> Tuple[int, int, int, int]:
+        """Return `(min_x, min_y, max_x, max_y)` across all placed components, wires, and flags."""
+        xs: List[int] = [64]
+        ys: List[int] = [64]
+        for comp in self.components.values():
+            xs.extend([comp.x, comp.x + 96])
+            ys.extend([comp.y, comp.y + 112])
+            for px, py in comp.unique_pin_points():
+                xs.append(px)
+                ys.append(py)
+        for w in self.wires:
+            xs.extend([w.x1, w.x2])
+            ys.extend([w.y1, w.y2])
+        for fl in self.flags:
+            xs.append(fl.x)
+            ys.append(fl.y)
+        return (min(xs), min(ys), max(xs), max(ys))
 
     def run_geometric_drc(self) -> List[str]:
         """
-        Check for geometric layout bugs:
+        Check for geometric and visual layout bugs:
         - Off-grid pins or flags
-        - Wire segments passing through an unrelated component pin (which causes an unintended short circuit
-          only if the wire wasn't meant to connect there — reported as a topological check).
+        - Crowded components whose labels/bodies would collide visually
         """
         issues: List[str] = []
-        for comp in self.components.values():
+        comp_list = list(self.components.values())
+        for comp in comp_list:
             for px, py in comp.unique_pin_points():
                 if px % 16 != 0 or py % 16 != 0:
                     issues.append(f"Off-grid pin on {comp.inst_name} at ({px}, {py})")
+
+        for i in range(len(comp_list)):
+            for j in range(i + 1, len(comp_list)):
+                c1, c2 = comp_list[i], comp_list[j]
+                dx = abs(c1.x - c2.x)
+                dy = abs(c1.y - c2.y)
+                if dx < 96 and dy < 112:
+                    issues.append(
+                        f"Crowded components '{c1.inst_name}' at ({c1.x},{c1.y}) and "
+                        f"'{c2.inst_name}' at ({c2.x},{c2.y}): dx={dx}, dy={dy} causes text overlap."
+                    )
         return issues
 
     def to_asc_string(self) -> str:
-        """Render the complete LTspice Version 4 `.asc` file content."""
+        """Render the complete LTspice Version 4 `.asc` file content with automatic directive footer spacing."""
+        _, _, max_x, max_y = self.get_circuit_bounds()
+        auto_y = ((max_y + 160) // 16) * 16
+
+        resolved_directives: List[Tuple[int, int, str]] = []
+        for d in self.directives:
+            if d.y is not None:
+                dy = d.y
+            else:
+                dy = auto_y
+                auto_y += 48  # Generous 48px vertical pitch between .tran/.meas/.model lines
+            resolved_directives.append((d.x, dy, d.directive))
+
+        sheet_w = max(self.width, ((max_x + 224) // 16) * 16)
+        sheet_h = max(self.height, ((auto_y + 96) // 16) * 16)
+
         lines: List[str] = [
             "Version 4",
-            f"SHEET 1 {self.width} {self.height}",
+            f"SHEET 1 {sheet_w} {sheet_h}",
         ]
         for w in self.wires:
             lines.append(f"WIRE {w.x1} {w.y1} {w.x2} {w.y2}")
@@ -265,8 +320,8 @@ class SchematicBuilder:
                 lines.append(f"SYMATTR Prefix {comp.prefix}")
             if comp.spice_line:
                 lines.append(f"SYMATTR SpiceLine {comp.spice_line}")
-        for d in self.directives:
-            lines.append(f"TEXT {d.x} {d.y} Left 2 {d.directive}")
+        for dx, dy, text_cmd in resolved_directives:
+            lines.append(f"TEXT {dx} {dy} Left 2 {text_cmd}")
         return "\n".join(lines) + "\n"
 
     def save(self, asc_path: str) -> str:

@@ -349,15 +349,25 @@ def resolve_and_compile_vision_graph(
     cir_lines.append(".end")
     cir_text = "\n".join(cir_lines) + "\n"
 
-    # 2. Build clean 16-pixel grid LTspice schematic (.asc) using modular column placement
-    # Each component is placed on a 160-pixel pitch column with local net flags on its pins,
-    # guaranteeing zero wire collisions and 100% netlist isomorphism!
+    # 2. Build clean 16-pixel grid LTspice schematic (.asc) using spacious 224px column placement
+    # with horizontal flag tabs (so LTspice renders all net labels horizontally at 0 deg)
+    # and automatic directive footer spacing >= 160px below all circuit elements.
     n_comps = len(graph.components)
-    sheet_w = max(960, 160 * (n_comps + 2))
-    sch = SchematicBuilder(width=sheet_w, height=640)
+    sheet_w = max(1280, 224 * (n_comps + 2))
+    sch = SchematicBuilder(width=sheet_w, height=800)
+
+    def _attach_clean_pin_flag(pt: Tuple[int, int], net: str, direction: str) -> None:
+        if net == "0":
+            sch.ground_pin(pt, stub_dy=32 if direction != "top" else -32)
+        elif direction == "top":
+            sch.power_pin(pt, net, stub_dy=-32, stub_dx=32)
+        elif direction == "bot":
+            sch.add_flag(pt, net, stub_dy=32, stub_dx=32)
+        elif direction == "left":
+            sch.add_flag(pt, net, stub_dx=-32, stub_dy=0)
 
     for idx, comp in enumerate(graph.components):
-        col_x = 96 + idx * 144  # Always a multiple of 16 (96 = 6*16, 144 = 9*16)
+        col_x = 96 + idx * 224  # Generous 224px (14*16) column spacing
         row_y = 224             # 14 * 16
         nodes_norm = ["0" if n.upper() == "GND" else n.upper() for n in comp.nodes]
         placed = sch.add_component(
@@ -370,12 +380,12 @@ def resolve_and_compile_vision_graph(
         )
         ctype = comp.comp_type.lower()
         if ctype in ("npn", "pnp") and len(nodes_norm) == 3:
-            sch.add_flag(placed.pin("C"), nodes_norm[0], stub_dy=-16)
-            sch.add_flag(placed.pin("B"), nodes_norm[1], stub_dx=-16)
-            sch.add_flag(placed.pin("E"), nodes_norm[2], stub_dy=16)
+            _attach_clean_pin_flag(placed.pin("C"), nodes_norm[0], "top")
+            _attach_clean_pin_flag(placed.pin("B"), nodes_norm[1], "left")
+            _attach_clean_pin_flag(placed.pin("E"), nodes_norm[2], "bot")
         elif len(nodes_norm) >= 2:
-            sch.add_flag(placed.pin("top"), nodes_norm[0], stub_dy=-16)
-            sch.add_flag(placed.pin("bot"), nodes_norm[1], stub_dy=16)
+            _attach_clean_pin_flag(placed.pin("top"), nodes_norm[0], "top")
+            _attach_clean_pin_flag(placed.pin("bot"), nodes_norm[1], "bot")
 
     if needs_2n2222:
         sch.add_directive(
