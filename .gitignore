@@ -1,0 +1,31 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# LTspice temporary & heavy binary files
+*.raw
+*.op.raw
+*.log.raw
+*.fft
+*.tmp
+
+# OS files
+.DS_Store
+Thumbs.db
