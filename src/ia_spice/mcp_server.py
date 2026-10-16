@@ -108,11 +108,69 @@ MCP_TOOLS: List[Dict[str, Any]] = [
             "required": ["asc_path"],
         },
     },
+    {
+        "name": "ia_spice_import_vision_graph",
+        "description": "Audit a circuit graph extracted from a schematic image. Detects missing values/models/supplies. In 'ask_user' mode, returns the user prompt listing missing parameters and analytical suggestions. In 'autonomous' mode, sizes missing components (E24) and compiles both .cir and 16px .asc files.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "components": {"type": "array", "items": {"type": "object"}},
+                "design_targets": {"type": "object"},
+                "mode": {"type": "string", "enum": ["ask_user", "autonomous"], "default": "ask_user"},
+                "user_overrides": {"type": "object"},
+                "output_asc_path": {"type": "string"},
+                "output_cir_path": {"type": "string"},
+            },
+            "required": ["title", "components"],
+        },
+    },
 ]
 
 
 def dispatch_tool_call(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     """Execute an MCP tool call and return a JSON-serializable dictionary."""
+    if name == "ia_spice_import_vision_graph":
+        from .vision_to_spice import (
+            ExtractedComponent,
+            VisionCircuitGraph,
+            resolve_and_compile_vision_graph,
+        )
+        comps = [
+            ExtractedComponent(
+                inst_name=c["inst_name"],
+                comp_type=c["comp_type"],
+                nodes=list(c["nodes"]),
+                value=c.get("value"),
+                role_hint=c.get("role_hint"),
+            )
+            for c in args["components"]
+        ]
+        graph = VisionCircuitGraph(
+            title=str(args["title"]),
+            components=comps,
+            design_targets=dict(args.get("design_targets") or {}),
+        )
+        mode = str(args.get("mode", "ask_user"))
+        audit, cir_text, sch = resolve_and_compile_vision_graph(
+            graph,
+            mode=mode,
+            user_overrides=args.get("user_overrides"),
+        )
+        if cir_text and args.get("output_cir_path"):
+            with open(args["output_cir_path"], "w", encoding="utf-8") as f:
+                f.write(cir_text)
+        if sch and args.get("output_asc_path"):
+            sch.save(args["output_asc_path"])
+        return {
+            "is_complete": audit.is_complete,
+            "mode_used": mode,
+            "missing_items": [dataclasses.asdict(m) for m in audit.missing_items],
+            "topology_warnings": audit.topology_warnings,
+            "user_prompt_markdown": audit.format_user_prompt(),
+            "compiled_cir": cir_text,
+        }
+
     if name == "ia_spice_snap_series":
         raw = parse_spice_value(str(args["value"]))
         series = args.get("series", "E24")

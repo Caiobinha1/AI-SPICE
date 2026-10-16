@@ -78,7 +78,7 @@ class TestStep5CLIAndMCP(unittest.TestCase):
 
         list_resp = handle_jsonrpc_Message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
         tools = list_resp["result"]["tools"]
-        self.assertEqual(len(tools), 5)
+        self.assertEqual(len(tools), 6)
 
         # Call ia_spice_size_colpitts via MCP JSON-RPC
         call_resp = handle_jsonrpc_Message({

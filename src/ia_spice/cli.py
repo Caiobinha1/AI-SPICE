@@ -83,6 +83,51 @@ def cmd_verify_asc(args: argparse.Namespace) -> int:
     return 0 if rep.is_clean else 1
 
 
+def cmd_import_vision(args: argparse.Namespace) -> int:
+    import dataclasses
+    from .vision_to_spice import (
+        ExtractedComponent,
+        VisionCircuitGraph,
+        resolve_and_compile_vision_graph,
+    )
+
+    with open(args.json_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    comps = [
+        ExtractedComponent(
+            inst_name=c["inst_name"],
+            comp_type=c["comp_type"],
+            nodes=list(c["nodes"]),
+            value=c.get("value"),
+            role_hint=c.get("role_hint"),
+        )
+        for c in data["components"]
+    ]
+    graph = VisionCircuitGraph(
+        title=data.get("title", "Vision Imported Circuit"),
+        components=comps,
+        design_targets=dict(data.get("design_targets") or {}),
+    )
+    audit, cir_text, sch = resolve_and_compile_vision_graph(graph, mode=args.mode)
+    if args.out_cir and cir_text:
+        with open(args.out_cir, "w", encoding="utf-8") as f:
+            f.write(cir_text)
+    if args.out_asc and sch:
+        sch.save(args.out_asc)
+
+    out = {
+        "is_complete": audit.is_complete,
+        "mode": args.mode,
+        "missing_items": [dataclasses.asdict(m) for m in audit.missing_items],
+        "topology_warnings": audit.topology_warnings,
+        "user_prompt_markdown": audit.format_user_prompt(),
+        "compiled_cir": cir_text,
+    }
+    print(json.dumps(out, indent=2, ensure_ascii=False))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ia-spice",
@@ -107,6 +152,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_ver.add_argument("asc", help="Path to .asc schematic file")
     p_ver.add_argument("--cir", default=None, help="Optional reference .cir netlist to compare against")
     p_ver.set_defaults(func=cmd_verify_asc)
+
+    p_vis = sub.add_parser("import-vision", help="Audit & reconstruct a circuit from an extracted image graph JSON")
+    p_vis.add_argument("json_file", help="Path to JSON graph extracted from schematic image")
+    p_vis.add_argument("--mode", default="ask_user", choices=["ask_user", "autonomous"])
+    p_vis.add_argument("--out-cir", default=None, help="Output .cir file path (in autonomous mode)")
+    p_vis.add_argument("--out-asc", default=None, help="Output .asc file path (in autonomous mode)")
+    p_vis.set_defaults(func=cmd_import_vision)
 
     return parser
 

@@ -90,7 +90,7 @@ _DB_TOKEN_RE = re.compile(
 )
 
 _SCALAR_LINE_RE = re.compile(
-    r"^([a-zA-Z_][a-zA-Z0-9_]*)\s*(?::\s*[^=]+)?=\s*(\([^\)]+\)|[+-]?\d+(?:\.\d+)?(?:e[+-]?\d+)?)",
+    r"^([a-zA-Z_][a-zA-Z0-9_]*)\s*(?::\s*[^=]+)?=\s*(\([^\)]+\)|[+-]?\d+(?:\.\d+)?(?:e[+-]?\d+)?)(?:\s+at\s+([+-]?\d+(?:\.\d+)?(?:e[+-]?\d+)?))?",
     re.IGNORECASE,
 )
 
@@ -199,7 +199,12 @@ def parse_ltspice_log(log_path: str) -> ParsedLogResult:
             name_key = m_scalar.group(1).lower()
             if name_key in footer_keys:
                 continue
-            val_obj = _parse_value_token(m_scalar.group(2))
+            # If the line ends with `AT <freq_or_time>` (from a `.meas ... WHEN ...` directive),
+            # the measured X-axis value is in group(3); otherwise use group(2).
+            if m_scalar.group(3) is not None and not m_scalar.group(2).strip().startswith("("):
+                val_obj = _parse_value_token(m_scalar.group(3))
+            else:
+                val_obj = _parse_value_token(m_scalar.group(2))
             if val_obj is not None:
                 result.scalars[name_key] = val_obj
 

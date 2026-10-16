@@ -22,6 +22,14 @@ from .sizing import (
     StageContract,
     check_cascade_loading,
 )
+from .vision_to_spice import (
+    ExtractedComponent,
+    MissingParamItem,
+    VisionCircuitGraph,
+    VisionImportAudit,
+    audit_circuit_from_image,
+    resolve_and_compile_vision_graph,
+)
 
 __all__ = [
     "__version__",
@@ -34,4 +42,10 @@ __all__ = [
     "evaluate_varactor_cv",
     "StageContract",
     "check_cascade_loading",
+    "ExtractedComponent",
+    "MissingParamItem",
+    "VisionCircuitGraph",
+    "VisionImportAudit",
+    "audit_circuit_from_image",
+    "resolve_and_compile_vision_graph",
 ]

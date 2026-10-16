@@ -42,13 +42,18 @@ IA-SPICE/
 │   ├── simulator.py         # Headless LTspice batch runner (-b / -netlist) + physics-based failure diagnostics
 │   ├── asc_compiler.py      # Calibrated 16-pixel grid LTspice .asc schematic builder with Manhattan routing & geometric DRC
 │   ├── netlist_verifier.py  # Formal schematic-to-netlist isomorphism verifier (guarantees NC_ = 0 and 100% node match)
+│   ├── vision_to_spice.py   # Vision-to-SPICE reconstructor with missing-parameter audit (ask_user vs autonomous E24 sizing)
 │   ├── reporting.py         # Automated Theory-vs-SPICE reconciliation tables, 300 DPI Matplotlib charts & HTML/Markdown reports
-│   ├── cli.py               # Command-line interface (`ia-spice doctor`, `snap`, `sim`, `verify-asc`)
+│   ├── cli.py               # Command-line interface (`ia-spice doctor`, `snap`, `sim`, `verify-asc`, `import-vision`)
 │   └── mcp_server.py        # Zero-dependency JSON-RPC 2.0 MCP Server for Claude Code, Antigravity, Cursor & Gemini CLI
+├── examples/
+│   ├── demo1_rlc_bandpass.py        # Demo 1: 1 MHz RLC Band-Pass Filter (E24 + .asc + .ac + report)
+│   ├── demo2_cascaded_bjt_amp.py    # Demo 2: 2-Stage BJT CE + Emitter-Follower Buffer (Loading contract + .asc + .tran)
+│   └── demo3_vision_reconstruction.py # Demo 3: Schematic photo reconstruction (missing-parameter detection & autonomous sizing)
 ├── skills/
 │   └── ia-spice-engineer/
-│       └── SKILL.md         # 7-Phase mandatory engineering protocol for AI coding agents
-└── tests/                   # 26 automated unit + live LTspice integration & benchmark tests (Levels 1 to 4)
+│       └── SKILL.md         # 7-Phase mandatory engineering protocol + Vision-to-SPICE image import guide
+└── tests/                   # 30 automated unit + live LTspice integration & benchmark tests (Levels 1 to 4 + Vision)
 ```
 
 ---
@@ -63,7 +68,7 @@ IA-SPICE/
 ```bash
 python -m unittest discover -s tests -v
 ```
-This runs **26 automated tests** across 4 engineering complexity levels (including live headless LTspice simulations and formal `.asc` netlist verifications).
+This runs **30 automated tests** across 4 engineering complexity levels plus Vision-to-SPICE schematic reconstruction (including live headless LTspice simulations and formal `.asc` netlist verifications).
 
 ### 3. Command-Line Usage (`cli.py`)
 ```bash
@@ -78,6 +83,9 @@ python -m ia_spice.cli verify-asc ../Esquematicos/S6_modulacao_fm_completa.asc -
 
 # 4. Run a simulation in batch mode and extract structured .meas JSON + physics diagnostics
 python -m ia_spice.cli sim ../vco_colpitts_fm/TESTE_bloco1_audio.cir
+
+# 5. Reconstruct a circuit from an image graph (ask_user or autonomous mode)
+python examples/demo3_vision_reconstruction.py
 ```
 
 ---
@@ -105,9 +113,20 @@ Exposed MCP tools:
 - `ia_spice_size_colpitts`: Colpitts LC + Varactor tank resonance and Barkhausen startup margin ($g_m R_p$).
 - `ia_spice_run_simulation`: Headless LTspice execution + `.meas` extraction + physics diagnostics.
 - `ia_spice_verify_schematic_asc`: Formal `LTspice.exe -netlist` check (`NC_ = 0` and isomorphism).
+- `ia_spice_import_vision_graph`: Reconstruct a circuit from a schematic photo/image graph, auditing any missing values (`mode="ask_user"`) or sizing them autonomously via E24 rules (`mode="autonomous"`).
 
 ### Option B: Install the Agent Skill
-Copy `skills/ia-spice-engineer/` into your agent's skills directory. It enforces the **7-Phase Equation-Grounded Protocol** (Specification $\rightarrow$ Hand Calculations $\rightarrow$ Isolated Block Simulation $\rightarrow$ Physics Diagnostics $\rightarrow$ Integration $\rightarrow$ Verified 16px `.asc` Compilation $\rightarrow$ Engineering Report).
+Copy `skills/ia-spice-engineer/` into your agent's skills directory. It enforces the **7-Phase Equation-Grounded Protocol** (Specification $\rightarrow$ Hand Calculations $\rightarrow$ Isolated Block Simulation $\rightarrow$ Physics Diagnostics $\rightarrow$ Integration $\rightarrow$ Verified 16px `.asc` Compilation $\rightarrow$ Engineering Report) as well as **Vision-to-SPICE Schematic Photo Reconstruction**.
+
+---
+
+## 📸 Vision-to-SPICE: Schematic Photo Reconstruction (`vision_to_spice.py`)
+
+When a user sends a photo, textbook scan, or hand-drawn picture of an electronic schematic, values are often missing or unreadable (e.g., resistors labeled simply `$R_1, R_2, R_C, R_E$` without Ohm values, an unlabeled NPN transistor `$Q_1$`, or an unspecified `$V_{CC}$` rail).
+
+`ia_spice.vision_to_spice` handles this with strict engineering discipline in two selectable modes:
+1. **`mode="ask_user"` (Interactive Audit):** Detects every missing component value, model, supply voltage, or stimulus, computes an analytical E24 suggestion for each based on the circuit topology, and presents a structured Markdown table asking the user whether they want to supply specific values or authorize autonomous sizing.
+2. **`mode="autonomous"` (Autonomous Sizing & Compilation):** Applies analytical DC/AC operating-point equations (plus any partial `user_overrides`), snaps values to commercial E24 series, compiles both a `.cir` netlist and a 16-pixel grid `.asc` schematic (`NC_ = 0`), and simulates the reconstructed circuit in LTspice.
 
 ---
 

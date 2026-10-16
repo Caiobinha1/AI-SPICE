@@ -67,3 +67,21 @@ description: |
 ### Phase 7: Automated Engineering Report & Lab Testbench Guide
 1. Generate the reconciliation table (*Target vs. Analytical vs. LTspice `.meas` vs. Error %*) and 300 DPI plots using `ia_spice.reporting`.
 2. Include perturbation experiments (e.g., varying input amplitude, load resistance, or inductor $R_{ser}$) so users can observe physical limits firsthand.
+
+---
+
+## 🖼️ Special Workflow: Reconstructing a Circuit from a Photo / Schematic Image (Vision-to-SPICE)
+
+When the user sends a photo, screenshot, or hand-drawn sketch of a schematic:
+
+1. **Step 1 — Visual Topology & Parameter Extraction**:
+   - Inspect the image and list every component (`inst_name`, `comp_type`, connected `nodes`, `role_hint`) into a `VisionCircuitGraph` (`ia_spice.vision_to_spice.VisionCircuitGraph`).
+   - **NEVER guess unreadable or missing values silently.** If a resistor/capacitor has no value written on the drawing, a transistor has no part number, or a `+VCC` / `Vin` port has no numeric voltage/frequency, set its `value="?"` (`None`).
+2. **Step 2 — Missing-Information Audit (`audit_circuit_from_image` / `ia_spice_import_vision_graph`)**:
+   - Run `resolve_and_compile_vision_graph(graph, mode="ask_user")`.
+   - If `audit.is_complete == False`, present `audit.format_user_prompt()` to the user. This table explicitly shows:
+     - Which component values, device models, or supply voltages are missing from the image;
+     - The analytical suggestion calculated by IA-SPICE (`suggested_value` + `sizing_rationale`);
+     - And asks the user: **(1) Do you want to provide the exact values, or (2) Should I size and choose them autonomously?**
+3. **Step 3 — Resolution, `.asc` Compilation & Verification**:
+   - Once the user provides the values (passed via `user_overrides`) or authorizes autonomous sizing (`mode="autonomous"`), call `resolve_and_compile_vision_graph` to generate the `.cir` netlist and the 16-pixel grid `.asc` schematic, verify `NC_ = 0` via `verify_asc_netlist`, and simulate in LTspice.
