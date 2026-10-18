@@ -1,0 +1,126 @@
+* =====================================================
+* S2/S3 — Núcleo VCO Colpitts: Ponto de Operação + Partida
+* Ensaio: .op para conferir polarização
+*         .tran para demonstrar partida e regime permanente
+* =====================================================
+* EEL7303 — VCO Colpitts FM
+* Caio Carlos Missfeld & Felipe Braun
+* =====================================================
+
+.include models\SMV1237.sub
+
+* =====================================================
+* ALIMENTAÇÃO
+* =====================================================
+VOSC VCC_OSC 0 9
+
+* =====================================================
+* POLARIZAÇÃO DO TRANSISTOR (Divisor de tensão + Choke RF)
+* =====================================================
+* R1: VCC_OSC → BIAS
+R1 VCC_OSC BIAS 39k
+* R2: BIAS → GND
+R2 BIAS 0 15k
+* CB: Desacoplamento RF do nó BIAS (terra AC)
+CB BIAS 0 10n
+* L1: Choke RF — alimenta base com DC, alta impedância para AC
+L1 BIAS B 4.7u Rser=5.4
+
+* =====================================================
+* TRANSISTOR Q1 — 2N2222, Colpitts em Coletor Comum
+* =====================================================
+* Coletor ligado diretamente a VCC (coletor comum)
+Q1 VCC_OSC B E 2N2222
+
+* =====================================================
+* TANQUE LC (Divisor Capacitivo)
+* =====================================================
+* C1: Base → Emissor
+C1 B E 330p
+* C2: Emissor → GND
+C2 E 0 470p
+* RE1: Emissor → GND (polarização DC + define corrente)
+RE1 E 0 1k
+
+* =====================================================
+* CONTROLE POR VARACTOR
+* =====================================================
+* CCV: Acoplamento AC entre Base e Varactor (bloqueia DC)
+CCV B KVAR 47p
+* Varactor: Cátodo em KVAR, Ânodo em GND
+X1 KVAR 0 SMV1237
+* RISO: Isolamento RF entre controle e varactor
+RISO CTRL_F KVAR 47k
+* Filtro passa-baixas na entrada de controle
+RFILT CTRL CTRL_F 1k
+CFILT CTRL_F 0 1n
+* Fonte de controle DC (4 V nominal)
+VCTRL CTRL 0 4
+
+* =====================================================
+* DESACOPLAMENTO DA ALIMENTAÇÃO
+* =====================================================
+C_DECOUPLE1 VCC_OSC 0 100n
+C_DECOUPLE2 VCC_OSC 0 10u
+
+* =====================================================
+* DIRETIVAS DE SIMULAÇÃO
+* =====================================================
+
+* --- Opção 1: Ponto de Operação (descomentar para .op) ---
+* .op
+
+* --- Opção 2: Transiente com startup (padrão) ---
+* 2 ms de simulação, passo máximo de 2 ns
+.tran 0 2m 0 2n startup
+
+* Salvar apenas sinais necessários para evitar arquivos enormes
+.save V(B) V(E) V(BIAS) V(KVAR) V(VCC_OSC) I(VOSC)
+
+* Desativar compressão para FFT precisa
+.options plotwinsize=0
+
+* =====================================================
+* MEDIÇÕES AUTOMÁTICAS (aparecem no SPICE Error Log)
+* =====================================================
+
+* Frequência: medir 100 períodos a partir de 1 ms
+.meas tran T100 TRIG V(B,BIAS) VAL=0 TD=1m RISE=1 TARG V(B,BIAS) VAL=0 TD=1m RISE=101
+.meas tran FOSC PARAM 100/T100
+
+* Amplitude pico-a-pico
+.meas tran VPP PP V(B,BIAS) FROM=1m TO=2m
+
+* Potência consumida pelo VCO
+.meas tran PVCO AVG (-V(VCC_OSC)*I(VOSC)) FROM=1m TO=2m
+
+* Tensão no emissor (pico-a-pico)
+.meas tran VPP_E PP V(E) FROM=1m TO=2m
+
+* Tensão mínima no varactor (verificar polarização reversa)
+.meas tran VR_MIN MIN V(KVAR) FROM=1m TO=2m
+.meas tran VR_MAX MAX V(KVAR) FROM=1m TO=2m
+
+* =====================================================
+* COMO USAR:
+*
+* 1. Abra este arquivo no LTspice
+* 2. Clique em Run (ícone do homem correndo)
+* 3. Adicione traces para visualizar:
+*    - V(B,BIAS) → oscilação RF (sem nível DC)
+*    - V(E)      → tensão no emissor
+*    - V(KVAR)   → tensão no varactor
+*    - -V(VCC_OSC)*I(VOSC) → potência instantânea
+*
+* 4. Veja o SPICE Error Log (View → SPICE Error Log)
+*    para os resultados de .meas (FOSC, VPP, PVCO)
+*
+* 5. Para .op: comente a linha .tran e descomente .op
+*
+* VALORES ESPERADOS:
+*   VB ≈ 2.33 V, VE ≈ 1.63 V, VCE ≈ 7.37 V
+*   IC ≈ 1.6 mA, PVCO ≈ 16 mW
+*   FOSC ≈ 5.05 MHz (pode diferir da estimativa passiva)
+* =====================================================
+
+.end

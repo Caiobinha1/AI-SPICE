@@ -1,0 +1,92 @@
+* =====================================================
+* BLOCO 1 ISOLADO — Teste do Condicionamento de Áudio
+* Ensaio: Verificar ponto de operação, ganho e resposta
+* =====================================================
+* EEL7303 — VCO Colpitts FM
+* Caio Carlos Missfeld & Felipe Braun
+* =====================================================
+
+.include models\SMV1237.sub
+
+* =====================================================
+* FONTE DE ÁUDIO
+* =====================================================
+* Senoide de 1 kHz, 140 mV pico, impedância de fonte 50 Ω
+VAUDIO AUDIO_SRC 0 SINE(0 0.14 1k)
+RAUDIO AUDIO_SRC AUDIO_AC 50
+
+* Acoplamento AC
+C_IN AUDIO_AC B4 1u
+
+* =====================================================
+* BLOCO 1 — SEGUIDOR DE EMISSOR Q4
+* =====================================================
+* Divisor de base
+RB4a VCC B4 43k
+RB4b B4 TRIM_TOP 47k
+RTRIM TRIM_TOP 0 5k
+
+* Transistor Q4
+Q4 VCC B4 E4 2N2222
+RE4 E4 0 3.9k
+
+* =====================================================
+* CARGA (simula a rede de controle)
+* =====================================================
+* RFILT + RISO em série = ~48 kΩ (alta impedância)
+RLOAD_SIM E4 0 48k
+
+* =====================================================
+* ALIMENTAÇÃO
+* =====================================================
+VCC VCC 0 9
+
+* =====================================================
+* SIMULAÇÃO 1: Ponto de operação
+* =====================================================
+* Descomente para .op:
+* .op
+
+* =====================================================
+* SIMULAÇÃO 2: Transiente — verificar ganho e forma de onda
+* =====================================================
+.tran 0 5m 0 1u
+
+.save V(B4) V(E4) V(AUDIO_SRC) V(AUDIO_AC) I(VCC)
+
+* =====================================================
+* MEDIÇÕES
+* =====================================================
+
+* Tensão DC no emissor (deve ser ~4 V)
+.meas tran VE4_DC AVG V(E4) FROM=1m TO=5m
+
+* Amplitude do áudio na entrada (base)
+.meas tran VB4_PP PP V(B4) FROM=1m TO=5m
+
+* Amplitude do áudio na saída (emissor)
+.meas tran VE4_PP PP V(E4) FROM=1m TO=5m
+
+* Ganho de tensão
+.meas tran AV4 PARAM VE4_PP/VB4_PP
+
+* =====================================================
+* SIMULAÇÃO 3: Resposta em frequência (AC)
+* =====================================================
+* Descomente o bloco abaixo e comente o .tran para AC:
+*
+* VAUDIO AUDIO_SRC 0 AC 0.14
+* .ac dec 100 10 100k
+*
+* Plotar: V(E4)/V(AUDIO_AC) para ver o ganho vs frequência
+* =====================================================
+
+* =====================================================
+* VALORES ESPERADOS:
+*   VE4_DC ≈ 4.0 V (ponto de operação)
+*   AV4 ≈ 0.99 (ganho do seguidor)
+*   VE4_PP ≈ 277 mVpp (140mV × 2 × 0.99)
+*   VB4_PP ≈ 280 mVpp
+* =====================================================
+
+.end

@@ -1,0 +1,13 @@
+* Auto-reconstructed from schematic image: Textbook Common-Emitter BJT Amplifier (From Photo)
+V_VCC VCC 0 9
+VIN IN 0 SINE(0 0.1 1k) AC 1
+CIN IN B 1.6u
+R1 VCC B 47k
+R2 B 0 13k
+RC VCC C 2.4k
+RE E 0 910
+Q1 C B E 2N2222
+COUT C OUT 1.6u
+RLOAD OUT 0 10k
+.model 2N2222 NPN(IS=1E-14 VAF=100 BF=200 IKF=0.3 XTB=1.5 BR=3 CJC=8E-12 CJE=25E-12 TR=100E-9 TF=400E-12 ITF=1 VTF=2 XTF=3 RB=10 RC=0.3 RE=0.2)
+.end

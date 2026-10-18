@@ -1,0 +1,181 @@
+* =====================================================
+* S6 — Demonstração de Modulação FM
+* Ensaio: Aplicar áudio de 1 kHz ao controle
+*         Verificar desvio de frequência ±5 kHz
+* =====================================================
+* EEL7303 — VCO Colpitts FM
+* Caio Carlos Missfeld & Felipe Braun
+* =====================================================
+
+.include models\SMV1237.sub
+
+* =====================================================
+* ALIMENTAÇÃO
+* =====================================================
+VOSC VCC_OSC 0 9
+VAUX VCC_AUX 0 9
+
+* =====================================================
+* BLOCO 1 — CONDICIONAMENTO DE ÁUDIO (Seguidor Q4)
+* =====================================================
+* Fonte de áudio: senoide de 1 kHz, ~140 mVpico sobre 0 V DC
+* (o DC é fornecido pelo divisor de Q4)
+VAUDIO AUDIO_IN 0 SINE(0 0.14 1k)
+RAUDIO AUDIO_IN AUDIO_AC 50
+
+* Acoplamento AC
+C_IN AUDIO_AC B4 1u
+
+* Divisor de base de Q4
+RB4a VCC_AUX B4 43k
+RB4b B4 TRIM_TOP 47k
+* Trimpot modelado como resistor fixo (posição inicial 5 kΩ)
+RTRIM TRIM_TOP 0 5k
+
+* Transistor Q4 — Seguidor de emissor
+Q4 VCC_AUX B4 CTRL 2N2222
+RE4 CTRL 0 3.9k
+
+* =====================================================
+* BLOCO 2 — REDE DE CONTROLE DO VARACTOR
+* =====================================================
+RFILT CTRL CTRL_F 1k
+CFILT CTRL_F 0 1n
+RISO CTRL_F KVAR 47k
+
+* =====================================================
+* BLOCO 3 — VARACTOR
+* =====================================================
+CCV B KVAR 47p
+X1 KVAR 0 SMV1237
+
+* =====================================================
+* BLOCO 4 — OSCILADOR COLPITTS (Núcleo VCO)
+* =====================================================
+R1 VCC_OSC BIAS 39k
+R2 BIAS 0 15k
+CB BIAS 0 10n
+L1 BIAS B 4.7u Rser=5.4
+
+Q1 VCC_OSC B E 2N2222
+
+C1 B E 330p
+C2 E 0 470p
+RE1 E 0 1k
+
+C_DECOUPLE1 VCC_OSC 0 100n
+C_DECOUPLE2 VCC_OSC 0 10u
+
+* =====================================================
+* BLOCO 5 — PRÉ-AMPLIFICADOR RF (Emissor Comum, Q2)
+* =====================================================
+* Extração fraca do emissor do VCO
+CEX E B2 2.2p
+
+* Polarização de Q2
+RB2a VCC_AUX B2 39k
+RB2b B2 0 10k
+
+* Transistor Q2
+Q2 C2_OUT B2 E2 2N2222
+
+* Resistor de emissor com degeneração parcial
+RE2_RF E2 E2_MID 100
+RE2_DC E2_MID 0 560
+C_BYPASS E2_MID 0 10n
+
+* Resistor de coletor
+RC2 VCC_AUX C2_OUT 2.2k
+
+* =====================================================
+* BLOCO 6 — BUFFER DE SAÍDA (Seguidor Q3)
+* =====================================================
+* Acoplamento AC entre Q2 e Q3
+C_AC2 C2_OUT B3 10n
+
+* Polarização de Q3
+RB3a VCC_AUX B3 1.8k
+RB3b B3 0 2.2k
+
+* Transistor Q3
+Q3 VCC_AUX B3 E3 2N2222
+RE3 E3 0 120
+
+* Saída para carga 50 Ω
+C_OUT E3 OUT 100n
+RLOAD OUT 0 50
+
+* =====================================================
+* SIMULAÇÃO
+* =====================================================
+
+* 4 ms total (estabilização em 1 ms, seguido por 3 ciclos completos de áudio de 1 kHz)
+* Passo máximo de 2 ns (50 pontos por ciclo de RF de 5 MHz)
+.tran 0 4m 0 2n startup
+
+.options plotwinsize=0
+
+* =====================================================
+* MEDIÇÕES
+* =====================================================
+
+* Frequência da portadora em regime (100 períodos de RF a partir de 2 ms)
+.meas tran T100 TRIG V(B,BIAS) VAL=0 TD=2m RISE=1 TARG V(B,BIAS) VAL=0 TD=2m RISE=101
+.meas tran FOSC PARAM 100/T100
+
+* Amplitude de saída pico-a-pico na carga de 50 Ω
+.meas tran VOUT_PP PP V(OUT) FROM=2m TO=4m
+
+* Tensão RMS na saída
+.meas tran VOUT_RMS RMS V(OUT) FROM=2m TO=4m
+
+* Potência RF média entregue à carga de 50 Ω (meta: ~10 mW)
+.meas tran POUT PARAM (VOUT_RMS*VOUT_RMS)/50
+
+* Corrente e potência média do núcleo VCO
+.meas tran IVOSC_AVG AVG -I(VOSC) FROM=2m TO=4m
+.meas tran PVCO PARAM 9*IVOSC_AVG
+
+* Corrente e potência média dos estágios auxiliares (Áudio + RF Pré-Amp + Buffer)
+.meas tran IVAUX_AVG AVG -I(VAUX) FROM=2m TO=4m
+.meas tran PAUX PARAM 9*IVAUX_AVG
+
+* Potência total DC consumida pelo circuito completo
+.meas tran PTOTAL PARAM PVCO+PAUX
+
+* Eficiência total
+.meas tran EFF_TOTAL PARAM POUT/PTOTAL
+
+* Tensão de controle instantânea no varactor (DC + modulação de áudio)
+.meas tran VCTRL_PP PP V(KVAR) FROM=2m TO=4m
+.meas tran VCTRL_AVG AVG V(KVAR) FROM=2m TO=4m
+
+* =====================================================
+* COMO VISUALIZAR A MODULAÇÃO FM:
+*
+* 1. Rode a simulação (~1-2 minutos)
+*
+* 2. Para ver a oscilação RF modulada:
+*    Plote V(B,BIAS) — verá o envelope modulado
+*
+* 3. Para ver o sinal na carga:
+*    Plote V(OUT)
+*
+* 4. Para ver áudio vs controle:
+*    Plote V(AUDIO_IN) e V(KVAR)
+*
+* 5. Para ver potência instantânea:
+*    Plote V(OUT)*V(OUT)/50
+*
+* 6. Para FREQUÊNCIA INSTANTÂNEA (avançado):
+*    No LTspice, use a FFT (View → FFT)
+*    Selecione janela de 10 ms em regime
+*    Verifique portadora + bandas laterais ±1 kHz
+*
+* VALORES ESPERADOS:
+*   FOSC ≈ 5 MHz (centro)
+*   Δf ≈ ±5 kHz (desvio FM)
+*   POUT ≈ 5-10 mW (depende de CEX)
+*   PVCO ≈ 16 mW
+* =====================================================
+.end

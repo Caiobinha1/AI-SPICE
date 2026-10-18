@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use IA-SPICE in your research, coursework, or engineering projects, please cite it as below."
+title: "IA-SPICE: Equation-Grounded AI Analog & RF Circuit Engineering Framework with Closed-Loop LTspice Verification"
+version: 0.1.0
+date-released: 2026-10-18
+license: MIT
+type: software
+authors:
+  - family-names: "IA-SPICE Contributors"
+keywords:
+  - analog-circuit-design
+  - rf-engineering
+  - ltspice
+  - spice-simulation
+  - model-context-protocol
+  - mcp-server
+  - electronic-design-automation
+  - colpitts-vco
