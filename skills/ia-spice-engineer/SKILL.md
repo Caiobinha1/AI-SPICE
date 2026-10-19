@@ -1,13 +1,13 @@
 ---
-name: ia-spice-engineer
+name: ai-spice-engineer
 description: |
-  Autonomous Equation-Grounded Analog & RF Circuit Design Protocol using IA-SPICE and LTspice.
+  Autonomous Equation-Grounded Analog & RF Circuit Design Protocol using AI-SPICE and LTspice.
   Activate whenever the user wants to design, size, simulate, debug, or generate LTspice schematics
   (`.asc` / `.cir`) and engineering reports for any electronic circuit (from simple RC/RLC filters
   and op-amp/BJT stages to multi-stage RF transmitters, VCOs, modulators, and power amplifiers).
 ---
 
-# IA-SPICE Protocol: 7-Stage Equation-Grounded Circuit Engineering
+# AI-SPICE Protocol: 7-Stage Equation-Grounded Circuit Engineering
 
 > [!IMPORTANT]
 > **WHY MOST AI CIRCUIT DESIGNS FAIL (AND HOW THIS PROTOCOL PREVENTS IT):**
@@ -56,7 +56,7 @@ description: |
 2. Verify that connecting stages does not shift carrier frequency ($<1\%$ pulling) or clip output waveforms, and verify overall DC power budget.
 
 ### Phase 6: 16-Pixel Grid `.asc` Compilation, Functional Block Organization & Full Signal Wiring
-1. Compile validated `.cir` netlists into LTspice `.asc` schematics using `ia_spice.ltspice_project.compile_netlist_to_asc(netlist_path, output_asc_path, style="A_textbook_wired")` (or CLI `ia-spice netlist-to-asc <file.cir> --style A_textbook_wired --verify`):
+1. Compile validated `.cir` netlists into LTspice `.asc` schematics using `ia_spice.ltspice_project.compile_netlist_to_asc(netlist_path, output_asc_path, style="A_textbook_wired")` (or CLI `ai-spice netlist-to-asc <file.cir> --style A_textbook_wired --verify`):
    - **NEVER place components in isolated columns connected only by `FLAG` text labels.**
    - **Connect 100% of signal, bias, and feedback nets using physical orthogonal `WIRE` segments** (`wire_signal_nets_on_schematic`), keeping **ONLY** power supply rails (`VCC`, `VEE`, `VDD`, `VSS`) and Ground (`0`) on local flags.
    - Organize functional stages left-to-right so the schematic is immediately readable by an engineer:
@@ -87,7 +87,7 @@ When the user sends a photo, screenshot, or hand-drawn sketch of a schematic:
    - Run `resolve_and_compile_vision_graph(graph, mode="ask_user")`.
    - If `audit.is_complete == False`, present `audit.format_user_prompt()` to the user. This table explicitly shows:
      - Which component values, device models, or supply voltages are missing from the image;
-     - The analytical suggestion calculated by IA-SPICE (`suggested_value` + `sizing_rationale`);
+     - The analytical suggestion calculated by AI-SPICE (`suggested_value` + `sizing_rationale`);
      - And asks the user: **(1) Do you want to provide the exact values, or (2) Should I size and choose them autonomously?**
 3. **Step 3 — Resolution, `.asc` Compilation & Verification**:
    - Once the user provides the values (passed via `user_overrides`) or authorizes autonomous sizing (`mode="autonomous"`), call `resolve_and_compile_vision_graph` to generate the `.cir` netlist and the 16-pixel grid `.asc` schematic, verify `NC_ = 0` via `verify_asc_netlist`, and simulate in LTspice.
@@ -98,7 +98,7 @@ When the user sends a photo, screenshot, or hand-drawn sketch of a schematic:
 
 When the user provides an existing LTspice file or project directory (`.asc`, `.cir`, `.net`, `.sub`, `.lib`, `.asy`, `.plt`, `.log`):
 
-1. **Inspect & Diagnose (`inspect_ltspice_project` / `ia-spice inspect`)**:
+1. **Inspect & Diagnose (`inspect_ltspice_project` / `ai-spice inspect`)**:
    - Audits all files in the directory for unconnected pins (`NC_`), missing `.include`/`.lib` libraries, failed `.meas` statements in `.log`, and visual layout overlaps in `.asc` schematics.
 2. **Modify or Add Components (`modify_asc_component`, `add_component_to_asc`, `parse_spice_netlist`)**:
    - Change component values (optionally snapping to `E12`/`E24`/`E96`) or inject new components (`res`, `cap`, `ind`, `npn`, `diode`) directly into an `.asc` schematic or `.cir` netlist; new components are automatically placed in a free 16px-grid column (`max_x + 224`) with horizontal flag tabs.

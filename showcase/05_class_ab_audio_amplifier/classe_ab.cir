@@ -1,0 +1,46 @@
+* Amplificador classe AB - 1W / 8ohm / +/-12V / Vin=100mVpp
+VCC VCC 0 12
+VEE VEE 0 -12
+VIN IN 0 SINE(0 {AMP} {FREQ}) AC 1
+CIN IN NIN 10u
+RIN NIN 0 10k
+XU1 NIN INV1 VCC VEE PRE LT1360
+RCOMP FB1 INV1 8.2k
+RF1 PRE FB1 18k
+RG1 FB1 0 2k
+XU2 PRE FB2 VCC VEE DRIVE LT1360
+RF2 OUT NFB 13k
+RF3 NFB FB2 1k
+RG2 FB2 0 2k
+CF2 OUT FB2 22p
+RBP VCC BP 2.2k
+RBN BN VEE 2.2k
+D1 BP DRIVE 1N4148
+D2 DRIVE BN 1N4148
+Q1 VCC BP EP FZT849
+Q2 VEE BN EN FZT949
+RE1 EP OUT 0.47
+RE2 EN OUT 0.47
+RLOAD OUT 0 {LOAD}
+RZ OUT ZOBEL 10
+CZ ZOBEL 0 100n
+CDP VCC 0 100n
+CDN VEE 0 100n
+CBP VCC 0 100u
+CBN VEE 0 100u
+.include LT1360.lib
+.include local_models.lib
+.include FZT949.lib
+.param AMP=50m FREQ=1k LOAD=8
+.options plotwinsize=0 numdgt=7
+.temp 27
+.tran 0 20m 0 200n
+.meas tran vout_rms RMS V(OUT) FROM 10m TO 20m
+.meas tran vout_pp PP V(OUT) FROM 10m TO 20m
+.meas tran offset AVG V(OUT) FROM 10m TO 20m
+.meas tran power AVG (V(OUT)*V(OUT)/8) FROM 10m TO 20m
+.meas tran p_q1 AVG (V(VCC,EP)*Ic(Q1)) FROM 10m TO 20m
+.meas tran p_q2 AVG (V(VEE,EN)*Ic(Q2)) FROM 10m TO 20m
+.meas tran p_dc AVG (-V(VCC)*I(VCC)-V(VEE)*I(VEE)) FROM 10m TO 20m
+.four 1k 10 10 V(OUT)
+.end

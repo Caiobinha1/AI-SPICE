@@ -1,6 +1,6 @@
 cff-version: 1.2.0
-message: "If you use IA-SPICE in your research, coursework, or engineering projects, please cite it as below."
-title: "IA-SPICE: Equation-Grounded AI Analog & RF Circuit Engineering Framework with Closed-Loop LTspice Verification"
+message: "If you use AI-SPICE in your research, coursework, or engineering projects, please cite it as below."
+title: "AI-SPICE: Equation-Grounded AI Analog & RF Circuit Engineering Framework with Closed-Loop LTspice Verification"
 version: 0.1.0
 date-released: 2026-10-18
 license: MIT
@@ -8,8 +8,8 @@ type: software
 authors:
   - given-names: "Caio"
     family-names: "Missfeld Carlos"
-repository-code: "https://github.com/Caiobinha1/IA-SPICE"
-url: "https://github.com/Caiobinha1/IA-SPICE"
+repository-code: "https://github.com/Caiobinha1/AI-SPICE"
+url: "https://github.com/Caiobinha1/AI-SPICE"
 keywords:
   - analog-circuit-design
   - rf-engineering

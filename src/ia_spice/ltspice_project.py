@@ -645,6 +645,7 @@ def add_component_to_asc(
         else:
             sch.add_flag(comp.pin("bot"), nodes_norm[1], stub_dy=32, stub_dx=32)
 
+    wire_signal_nets_on_schematic(sch)
     sch.save(output_path or asc_path, auto_sanitize=True)
     return sch
 
@@ -1284,7 +1285,7 @@ def _group_into_functional_columns(comps: List[SpiceNetlistComponent]) -> List[L
 def _layout_style_a_textbook_wired(
     proj: SpiceNetlistProject,
     comps: List[SpiceNetlistComponent],
-    output_asc_path: str,
+    output_asc_path: Optional[str] = None,
 ) -> SchematicBuilder:
     """
     Style A (Default): Functional stage-flow layout with FULL orthogonal signal wiring (`WIRE`)
@@ -1402,10 +1403,8 @@ def _layout_style_a_textbook_wired(
                 div_placed.append((dc, dp, n_top_d, n_bot_d))
 
             if div_placed:
-                # Top pin of top divider resistor
                 _, p_top_d, n_top_first, _ = div_placed[0]
                 sch.add_flag(p_top_d.pin("top"), n_top_first, stub_dy=-32, stub_dx=32) if n_top_first != "0" else sch.ground_pin(p_top_d.pin("top"), stub_dy=-32)
-                # Wire consecutive divider resistors directly top-to-bottom!
                 for idx_d in range(len(div_placed) - 1):
                     _, p_up, _, shared_dnet = div_placed[idx_d]
                     _, p_dn, _, _ = div_placed[idx_d + 1]
@@ -1414,11 +1413,9 @@ def _layout_style_a_textbook_wired(
                     sch.connect_points(b_pt, t_pt, vh_order="VH")
                     mid_dy = ((b_pt[1] + t_pt[1]) // 32) * 16
                     sch.add_flag((b_pt[0], mid_dy), shared_dnet, stub_dx=32, stub_dy=0)
-                # Bottom pin of bottom divider resistor
                 _, p_bot_d, _, n_bot_last = div_placed[-1]
                 sch.ground_pin(p_bot_d.pin("bot"), stub_dy=32) if n_bot_last == "0" else sch.add_flag(p_bot_d.pin("bot"), n_bot_last, stub_dy=32, stub_dx=32)
 
-            # Place remaining auxiliary feedback passives (e.g. RCOMP on left or CF2 on right) with 144px spacing
             rem_fb = [c for c in fb_passives if c.inst_name not in used_fb]
             for r_idx, rc in enumerate(rem_fb):
                 if in_m in rc.nodes and rc.prefix == "R":
@@ -1445,11 +1442,9 @@ def _layout_style_a_textbook_wired(
                 placed_chain.append((bc, bp))
                 cur_y += 176
 
-            # Top pin of first component
             c_first, p_first = placed_chain[0]
             sch.power_pin(p_first.pin("top"), c_first.nodes[0], stub_dy=-32, stub_dx=32)
 
-            # Wire consecutive components in the vertical chain directly!
             for idx_b in range(len(placed_chain) - 1):
                 c_up, p_up = placed_chain[idx_b]
                 c_dn, p_dn = placed_chain[idx_b + 1]
@@ -1460,7 +1455,6 @@ def _layout_style_a_textbook_wired(
                 mid_y = ((bot_pt[1] + top_pt[1]) // 32) * 16
                 sch.add_flag((bot_pt[0], mid_y), shared_net, stub_dx=32, stub_dy=0)
 
-            # Bottom pin of last component
             c_last, p_last = placed_chain[-1]
             last_net = c_last.nodes[1]
             if last_net == "0":
@@ -1478,27 +1472,21 @@ def _layout_style_a_textbook_wired(
             q1_p = sch.add_component(q1_c.inst_name, "npn", x=col_x, y=144, value=q1_c.value, orientation="R0")
             re1_p = sch.add_component(re1_c.inst_name, "res", x=col_x + 48, y=304, value=re1_c.value, orientation="R0")
             re2_p = sch.add_component(re2_c.inst_name, "res", x=col_x + 48, y=464, value=re2_c.value, orientation="R0")
-            # Place PNP in M180 so Emitter is at top (x+64, y-96) and Collector is at bottom (x+64, y)!
             q2_p = sch.add_component(q2_c.inst_name, "pnp", x=col_x, y=720, value=q2_c.value, orientation="M180")
 
-            # Q1 collector (VCC) & base (BP)
             sch.power_pin(q1_p.pin("C"), q1_c.nodes[0], stub_dy=-32, stub_dx=32)
             sch.add_flag(q1_p.pin("B"), q1_c.nodes[1], stub_dx=-48, stub_dy=0)
 
-            # Q1 emitter -> RE1 top (`EP`)
             sch.connect_points(q1_p.pin("E"), re1_p.pin("top"), vh_order="VH")
             sch.add_flag((q1_p.pin("E")[0], 288), q1_c.nodes[2], stub_dx=48, stub_dy=0)
 
-            # RE1 bot -> RE2 top (`OUT`)
             out_net = re1_c.nodes[1] if re1_c.nodes[0] == q1_c.nodes[2] else re1_c.nodes[0]
             sch.connect_points(re1_p.pin("bot"), re2_p.pin("top"), vh_order="VH")
             sch.add_flag((re1_p.pin("bot")[0], 432), out_net, stub_dx=48, stub_dy=0)
 
-            # RE2 bot -> Q2 emitter (`EN`)
             sch.connect_points(re2_p.pin("bot"), q2_p.pin("E"), vh_order="VH")
             sch.add_flag((re2_p.pin("bot")[0], 592), q2_c.nodes[2], stub_dx=48, stub_dy=0)
 
-            # Q2 base (`BN`) & collector (`VEE`)
             sch.add_flag(q2_p.pin("B"), q2_c.nodes[1], stub_dx=-48, stub_dy=0)
             sch.power_pin(q2_p.pin("C"), q2_c.nodes[0], stub_dy=32, stub_dx=32)
 
@@ -1595,7 +1583,10 @@ def _layout_style_a_textbook_wired(
     for d in proj.directives:
         sch.add_directive(d)
 
-    sch.save(output_asc_path, auto_sanitize=True)
+    if output_asc_path:
+        sch.save(output_asc_path, auto_sanitize=True)
+    else:
+        sch.sanitize_visual_layout()
     return sch
 
 
@@ -1723,13 +1714,12 @@ def _layout_style_c_modular_blocks(
 ) -> SchematicBuilder:
     """
     Style C: Modular Sub-Block Cells with extra-wide 256px column spacing, section headers, and
-    a dedicated right-side Simulation & Measurement Dashboard so `.tran`/`.meas` are completely
-    separated horizontally from the schematic!
+    full orthogonal signal-net wiring!
     """
     n_comps = len(comps)
     sch = SchematicBuilder(width=max(1600, 256 * (n_comps + 4)), height=960)
 
-    sch.add_directive("=== CIRCUITO MODULARIZADO POR CELULAS (ESTILO C) ===", x=96, y=64, is_comment=True)
+    sch.add_directive("=== CIRCUITO MODULARIZADO POR CELULAS (ESTILO C) ===", x=96, y=48, is_comment=True)
 
     for idx, c in enumerate(comps):
         col_x = 96 + idx * 256
@@ -1759,6 +1749,8 @@ def _layout_style_c_modular_blocks(
         elif len(c.nodes) >= 2:
             sch.power_pin(p.pin("top"), c.nodes[0], stub_dy=-48, stub_dx=32) if c.nodes[0] != "0" else sch.ground_pin(p.pin("top"), stub_dy=-48)
             sch.ground_pin(p.pin("bot"), stub_dy=48) if c.nodes[1] == "0" else sch.add_flag(p.pin("bot"), c.nodes[1], stub_dy=48, stub_dx=32)
+
+    wire_signal_nets_on_schematic(sch)
 
     for d in proj.directives:
         sch.add_directive(d, x=96)

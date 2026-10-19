@@ -30,3 +30,7 @@ examples/out_demo*/
 # OS files
 .DS_Store
 Thumbs.db
+
+# LTspice generated netlists & example temp outputs
+*.net
+examples/out_*

@@ -349,49 +349,12 @@ def resolve_and_compile_vision_graph(
     cir_lines.append(".end")
     cir_text = "\n".join(cir_lines) + "\n"
 
-    # 2. Build clean 16-pixel grid LTspice schematic (.asc) using spacious 224px column placement
-    # with horizontal flag tabs (so LTspice renders all net labels horizontally at 0 deg)
-    # and automatic directive footer spacing >= 160px below all circuit elements.
-    n_comps = len(graph.components)
-    sheet_w = max(1280, 224 * (n_comps + 2))
-    sch = SchematicBuilder(width=sheet_w, height=800)
+    # 2. Build clean 16-pixel grid LTspice schematic (.asc) with functional stage grouping
+    # and full orthogonal Manhattan WIRE routing for all signal nets (leaving only power & GND on local flags)
+    from .ltspice_project import parse_spice_netlist, _layout_style_a_textbook_wired
 
-    def _attach_clean_pin_flag(pt: Tuple[int, int], net: str, direction: str) -> None:
-        if net == "0":
-            sch.ground_pin(pt, stub_dy=32 if direction != "top" else -32)
-        elif direction == "top":
-            sch.power_pin(pt, net, stub_dy=-32, stub_dx=32)
-        elif direction == "bot":
-            sch.add_flag(pt, net, stub_dy=32, stub_dx=32)
-        elif direction == "left":
-            sch.add_flag(pt, net, stub_dx=-32, stub_dy=0)
-
-    for idx, comp in enumerate(graph.components):
-        col_x = 96 + idx * 224  # Generous 224px (14*16) column spacing
-        row_y = 224             # 14 * 16
-        nodes_norm = ["0" if n.upper() == "GND" else n.upper() for n in comp.nodes]
-        placed = sch.add_component(
-            inst_name=comp.inst_name,
-            symbol_type=comp.comp_type.lower(),
-            x=col_x,
-            y=row_y,
-            value=comp.value or "1k",
-            orientation="R0",
-        )
-        ctype = comp.comp_type.lower()
-        if ctype in ("npn", "pnp") and len(nodes_norm) == 3:
-            _attach_clean_pin_flag(placed.pin("C"), nodes_norm[0], "top")
-            _attach_clean_pin_flag(placed.pin("B"), nodes_norm[1], "left")
-            _attach_clean_pin_flag(placed.pin("E"), nodes_norm[2], "bot")
-        elif len(nodes_norm) >= 2:
-            _attach_clean_pin_flag(placed.pin("top"), nodes_norm[0], "top")
-            _attach_clean_pin_flag(placed.pin("bot"), nodes_norm[1], "bot")
-
-    if needs_2n2222:
-        sch.add_directive(
-            ".model 2N2222 NPN(IS=1E-14 VAF=100 BF=200 IKF=0.3 XTB=1.5 BR=3 CJC=8E-12 CJE=25E-12 TR=100E-9 TF=400E-12 ITF=1 VTF=2 XTF=3 RB=10 RC=0.3 RE=0.2)"
-        )
-    if needs_1n4148:
-        sch.add_directive(".model 1N4148 D(IS=2.52E-9 RS=0.568 N=1.752 CJO=4E-12 M=0.4 TT=20E-9)")
+    proj = parse_spice_netlist(cir_text)
+    sch = _layout_style_a_textbook_wired(proj, list(proj.components.values()), output_asc_path=None)
 
     return audit, cir_text, sch
+
