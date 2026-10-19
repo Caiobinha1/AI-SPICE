@@ -983,12 +983,13 @@ def wire_signal_nets_on_schematic(sch: SchematicBuilder) -> int:
                 all_connected = False
         if all_connected:
             wired_count += 1
-            # Keep only ONE flag label on this continuous wired signal net!
-            keep_fl = fl_sorted[0]
-            for extra_fl in fl_sorted[1:]:
-                if extra_fl in sch.flags:
+            # Keep only ONE flag label on this continuous wired signal net (preferring the midpoint/load pin
+            # rather than the left-most coupling cap pin so labels never crowd R90 capacitors!)
+            keep_idx = len(fl_sorted) // 2
+            keep_fl = fl_sorted[keep_idx]
+            for idx_f, extra_fl in enumerate(fl_sorted):
+                if idx_f != keep_idx and extra_fl in sch.flags:
                     sch.flags.remove(extra_fl)
-            keep_fl.x, keep_fl.y = fl_sorted[0].x, fl_sorted[0].y
 
     return wired_count
 
