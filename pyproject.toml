@@ -47,6 +47,11 @@ dev = [
 [project.scripts]
 ia-spice = "ia_spice.cli:main"
 
+[project.urls]
+Homepage = "https://github.com/Caiobinha1/IA-SPICE"
+Repository = "https://github.com/Caiobinha1/IA-SPICE.git"
+Issues = "https://github.com/Caiobinha1/IA-SPICE/issues"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
