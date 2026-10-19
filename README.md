@@ -141,7 +141,7 @@ IA-SPICE/
 
 ### 1. Install
 ```bash
-git clone https://github.com/YOUR_USERNAME/IA-SPICE.git
+git clone https://github.com/Caiobinha1/IA-SPICE.git
 cd IA-SPICE
 pip install -e .[dev]
 ```

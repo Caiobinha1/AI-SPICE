@@ -43,7 +43,7 @@ Abra um Pull Request (leva 2 minutos) adicionando uma linha com o link do seu re
 3. **`mcp.so`**, **`glama.ai/mcp/servers`** e **`pulsemcp.com`** (basta colar a URL do repositório GitHub no formulário de submissão deles).
 - **Linha pronta para o PR nas listas `awesome-mcp-servers`:**
   ```markdown
-  - [IA-SPICE](https://github.com/SEU_USUARIO/IA-SPICE) - Equation-grounded analog & RF circuit design, closed-loop LTspice batch simulation, Vision-to-SPICE schematic photo reconstruction, and 16px-grid `.asc` schematic compiler (`NC_ = 0`).
+  - [IA-SPICE](https://github.com/Caiobinha1/IA-SPICE) - Equation-grounded analog & RF circuit design, closed-loop LTspice batch simulation, Vision-to-SPICE schematic photo reconstruction, and 16px-grid `.asc` schematic compiler (`NC_ = 0`).
   ```
 
 ---
