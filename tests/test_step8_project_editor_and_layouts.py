@@ -92,6 +92,63 @@ class TestStep8ProjectEditorAndAutoLayouts(unittest.TestCase):
             self.assertIn(".cir", res["inspected_formats"])
             self.assertIn(".plt", res["inspected_formats"])
 
+    def test_opamp_push_pull_full_signal_wiring(self) -> None:
+        """
+        Verify that a complex multi-stage netlist (5-pin Op-Amps `XU1`/`XU2`, Diode Bias Chain,
+        Complementary NPN/PNP Push-Pull Stage, Zobel Network, and Dual Supply Decoupling) is
+        compiled into functional blocks with 100% physical WIRE connections on all signal nets
+        (only 1 FLAG label per signal net) and zero floating pins (`NC_ = 0`).
+        """
+        from collections import Counter
+        from ia_spice.ltspice_project import compile_netlist_to_asc, _is_power_node
+        from ia_spice.netlist_verifier import verify_asc_netlist
+
+        netlist = """* Class AB Op-Amp + Push-Pull Test
+VCC VCC 0 12
+VEE VEE 0 -12
+VIN IN 0 SINE(0 50m 1k) AC 1
+CDP VCC 0 100n
+CDN VEE 0 100n
+CIN IN NIN 10u
+RIN NIN 0 10k
+XU1 NIN INV1 VCC VEE PRE LT1360
+RF1 PRE FB1 18k
+RG1 FB1 0 2k
+RCOMP INV1 FB1 8.2k
+XU2 PRE FB2 VCC VEE DRIVE LT1360
+RF2 OUT NFB 13k
+RF3 NFB FB2 1k
+RG2 FB2 0 2k
+CF2 OUT FB2 22p
+RBP VCC BP 2.2k
+D1 BP DRIVE 1N4148
+D2 DRIVE BN 1N4148
+RBN BN VEE 2.2k
+Q1 VCC BP EP 2N2222
+Q2 VEE BN EN 2N2907
+RE1 EP OUT 0.47
+RE2 OUT EN 0.47
+RLOAD OUT 0 8
+RZ OUT ZOBEL 10
+CZ ZOBEL 0 100n
+.model 1N4148 D(Is=2.52n Rs=0.568 N=1.752)
+.model 2N2222 NPN(Is=14.34f Xti=3 Eg=1.11 Vaf=74.03 Bf=255.9)
+.model 2N2907 PNP(Is=650.6E-18 Xti=3 Eg=1.11 Vaf=115.7 Bf=231.7)
+.tran 2m
+.end
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            asc_path = os.path.join(tmp, "class_ab_test.asc")
+            sch = compile_netlist_to_asc(netlist, asc_path, style="A_textbook_wired")
+            rep = verify_asc_netlist(asc_path)
+            self.assertTrue(rep.is_clean, f"Expected clean schematic, got NC={rep.unconnected_pins}, mismatches={rep.mismatches}")
+
+            # Every non-power signal net must have at most 1 FLAG (meaning all pins are physically wired!)
+            flag_counts = Counter(fl.net_name for fl in sch.flags if fl.net_name != "0" and not _is_power_node(fl.net_name))
+            for sig_net, count in flag_counts.items():
+                self.assertEqual(count, 1, f"Signal net '{sig_net}' has {count} flags instead of 1 continuous wired net!")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

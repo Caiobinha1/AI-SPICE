@@ -342,6 +342,10 @@ def beautify_asc_file(
             comp.y = 224
         fixes.append("Respaced crowded flag-connected components onto 224px columns.")
 
+    wired_nets = wire_signal_nets_on_schematic(sch)
+    if wired_nets > 0:
+        fixes.append(f"Physically wired {wired_nets} signal nets with orthogonal Manhattan wires.")
+
     target = output_path or asc_path
     sch.save(target, auto_sanitize=True)
     return sch, fixes
@@ -358,9 +362,12 @@ class SpiceNetlistComponent:
     nodes: List[str]
     value: str
     raw_line: str
+    symbol_override: Optional[str] = None
 
     @property
     def symbol_type(self) -> str:
+        if self.symbol_override:
+            return self.symbol_override
         p = self.prefix.upper()
         if p == "R":
             return "res"
@@ -375,7 +382,11 @@ class SpiceNetlistComponent:
         if p == "D":
             return "diode"
         if p == "Q":
-            return "pnp" if "PNP" in self.value.upper() else "npn"
+            vu = self.value.upper()
+            pnp_prefixes = ("PNP", "2N3906", "2N2907", "BC55", "FZT9", "TIP30", "TIP32", "TIP42", "BD136", "BD138", "BD140", "MJE2955", "2SA", "2SB")
+            return "pnp" if any(vu.startswith(px) or px in vu for px in pnp_prefixes) else "npn"
+        if p == "X" and len(self.nodes) == 5:
+            return f"Opamps\\{self.value}"
         return "cell"
 
 
@@ -458,14 +469,17 @@ def parse_spice_netlist(path_or_text: str) -> SpiceNetlistProject:
     if os.path.isfile(path_or_text):
         text = _read_text_auto_encoding(path_or_text)
         src_path = path_or_text
+        base_dir = os.path.dirname(os.path.abspath(path_or_text))
     else:
         text = path_or_text
         src_path = None
+        base_dir = None
 
     raw_lines = text.splitlines()
     title = raw_lines[0].strip() if raw_lines else "* SPICE Netlist"
     proj = SpiceNetlistProject(title=title, source_path=src_path)
 
+    pnp_models = set()
     in_subckt = False
     for idx, raw in enumerate(raw_lines):
         if idx == 0 and raw.strip().startswith("*"):
@@ -476,12 +490,29 @@ def parse_spice_netlist(path_or_text: str) -> SpiceNetlistProject:
         if line.startswith("*"):
             proj.comments.append(line)
             continue
-        # Strip inline ';' comment
         if ";" in line:
             line = line.split(";", 1)[0].strip()
         upper = line.upper()
         if upper == ".END" or upper == ".BACKANNO":
             continue
+        if upper.startswith(".MODEL "):
+            parts = upper.split()
+            if len(parts) >= 3 and "PNP" in parts[2]:
+                pnp_models.add(parts[1])
+        if base_dir and (upper.startswith(".INCLUDE ") or upper.startswith(".LIB ")):
+            inc_file = line.split(None, 1)[1].strip().strip('"')
+            inc_path = os.path.join(base_dir, inc_file)
+            if os.path.isfile(inc_path):
+                try:
+                    inc_txt = _read_text_auto_encoding(inc_path)
+                    for iline in inc_txt.splitlines():
+                        iu = iline.strip().upper()
+                        if iu.startswith(".MODEL "):
+                            iparts = iu.split()
+                            if len(iparts) >= 3 and "PNP" in iparts[2]:
+                                pnp_models.add(iparts[1])
+                except Exception:
+                    pass
         if upper.startswith(".SUBCKT "):
             in_subckt = True
             proj.directives.append(line)
@@ -524,7 +555,12 @@ def parse_spice_netlist(path_or_text: str) -> SpiceNetlistProject:
             raw_line=line,
         )
 
+    for comp in proj.components.values():
+        if comp.prefix == "Q" and comp.value.upper() in pnp_models:
+            comp.symbol_override = "pnp"
+
     return proj
+
 
 
 # ==============================================================================
@@ -614,12 +650,346 @@ def add_component_to_asc(
 
 
 # ==============================================================================
-# 7. Three Automatic Layout Styles for Any Netlist (`compile_netlist_to_asc`)
+# 7. Orthogonal Signal Wire Router & Functional Stage Layout Engine
 # ==============================================================================
 
 def _is_power_node(node: str) -> bool:
     u = node.upper()
-    return u.startswith("VCC") or u.startswith("VDD") or u.startswith("VEE") or u.startswith("VSS")
+    return (
+        u.startswith("VCC")
+        or u.startswith("VDD")
+        or u.startswith("VEE")
+        or u.startswith("VSS")
+        or u in ("VP", "VN", "V+", "V-", "+12V", "-12V", "+5V", "-5V", "+15V", "-15V")
+    )
+
+
+def wire_signal_nets_on_schematic(sch: SchematicBuilder) -> int:
+    """
+    Connect all non-power signal nets (`net not in ('0', 'GND')` and not `_is_power_node(net)`)
+    using physical orthogonal Manhattan `WIRE` segments on the 16-pixel grid, while keeping
+    power rails (`VCC`, `VEE`, `VDD`, `VSS`) and Ground (`0`) on local flags.
+
+    Guarantees:
+    - No routed wire ever touches a component pin, flag, or wire endpoint belonging to another net.
+    - No routed wire ever overlaps collinearly with a wire segment of another net.
+    - No routed wire cuts across the interior body/label box of a component.
+    - Redundant duplicate `FLAG` labels on wired signal nets are removed so only ONE probe
+      label remains per continuous signal wire.
+    Returns the number of signal nets wired.
+    """
+    sch.sanitize_visual_layout()
+
+    # 1. Build initial connectivity clusters to know which net owns each existing wire/pin/flag
+    adj: Dict[Point, Set[Point]] = {}
+
+    def _add_edge(a: Point, b: Point) -> None:
+        adj.setdefault(a, set()).add(b)
+        adj.setdefault(b, set()).add(a)
+
+    for w in sch.wires:
+        if w.x1 == w.x2:
+            y_lo, y_hi = min(w.y1, w.y2), max(w.y1, w.y2)
+            pts = [(w.x1, y) for y in range(y_lo, y_hi + 16, 16)]
+        else:
+            x_lo, x_hi = min(w.x1, w.x2), max(w.x1, w.x2)
+            pts = [(x, w.y1) for x in range(x_lo, x_hi + 16, 16)]
+        for i in range(len(pts) - 1):
+            _add_edge(pts[i], pts[i + 1])
+
+    pin_pts: Set[Point] = set()
+    body_boxes: List[Tuple[int, int, int, int, Set[Point]]] = []
+    for comp in sch.components.values():
+        c_pins = set(comp.unique_pin_points())
+        pin_pts.update(c_pins)
+        for p in c_pins:
+            adj.setdefault(p, set())
+        # Protective bounding box around component symbol & right-side text labels
+        sym_l = comp.symbol_type.lower()
+        if "opamp" in sym_l or "lt1360" in sym_l:
+            bx1, by1, bx2, by2 = comp.x - 32, comp.y - 32, comp.x + 96, comp.y + 48
+        elif sym_l in ("npn", "pnp"):
+            if comp.orientation == "M180":
+                bx1, by1, bx2, by2 = comp.x, comp.y - 96, comp.x + 112, comp.y
+            else:
+                bx1, by1, bx2, by2 = comp.x, comp.y, comp.x + 112, comp.y + 96
+        elif comp.orientation == "R90":
+            bx1, by1, bx2, by2 = comp.x - 96, comp.y - 16, comp.x + 16, comp.y + 48
+        else:
+            bx1, by1, bx2, by2 = comp.x - 16, comp.y, comp.x + 96, comp.y + 96
+        body_boxes.append((bx1, by1, bx2, by2, c_pins))
+
+    for fl in sch.flags:
+        adj.setdefault((fl.x, fl.y), set())
+
+    # Connected components BFS
+    visited: Set[Point] = set()
+    point_to_net: Dict[Point, str] = {}
+    horiz_segs: List[Tuple[int, int, int, str]] = []  # (y, x_min, x_max, net)
+    vert_segs: List[Tuple[int, int, int, str]] = []   # (x, y_min, y_max, net)
+
+    flag_at_pt: Dict[Point, str] = {(fl.x, fl.y): fl.net_name for fl in sch.flags}
+    anon_idx = 0
+    for start_pt in list(adj.keys()):
+        if start_pt in visited:
+            continue
+        comp_pts: Set[Point] = set()
+        queue = [start_pt]
+        visited.add(start_pt)
+        net_label: Optional[str] = None
+        while queue:
+            cur = queue.pop()
+            comp_pts.add(cur)
+            if cur in flag_at_pt:
+                net_label = flag_at_pt[cur]
+            for nxt in adj.get(cur, ()):
+                if nxt not in visited:
+                    visited.add(nxt)
+                    queue.append(nxt)
+        if net_label is None:
+            anon_idx += 1
+            net_label = f"__ANON_{anon_idx}"
+        for pt in comp_pts:
+            point_to_net[pt] = net_label
+
+    for w in sch.wires:
+        wnet = point_to_net.get((w.x1, w.y1), "")
+        if w.y1 == w.y2:
+            horiz_segs.append((w.y1, min(w.x1, w.x2), max(w.x1, w.x2), wnet))
+        else:
+            vert_segs.append((w.x1, min(w.y1, w.y2), max(w.y1, w.y2), wnet))
+
+    # Critical points that a wire of another net may NEVER touch (even when crossing perpendicularly):
+    # component pins, flags, and wire endpoints/corners!
+    critical_pts_by_net: Dict[Point, str] = {}
+    for p in pin_pts:
+        critical_pts_by_net[p] = point_to_net.get(p, "")
+    for fl in sch.flags:
+        critical_pts_by_net[(fl.x, fl.y)] = fl.net_name
+    for w in sch.wires:
+        critical_pts_by_net[(w.x1, w.y1)] = point_to_net.get((w.x1, w.y1), "")
+        critical_pts_by_net[(w.x2, w.y2)] = point_to_net.get((w.x2, w.y2), "")
+
+    def _seg_valid(p1: Point, p2: Point, net: str) -> Tuple[bool, int]:
+        """Return `(is_valid, penalty_cost)` for an orthogonal segment `p1 -> p2` of `net`."""
+        x1, y1 = p1
+        x2, y2 = p2
+        if x1 != x2 and y1 != y2:
+            return (False, 999999)
+        if x1 == x2 and y1 == y2:
+            return (True, 0)
+
+        # Endpoint check: endpoints must not lie on any wire/pin of another net
+        for ep in (p1, p2):
+            owner = point_to_net.get(ep)
+            if owner is not None and owner != net:
+                return (False, 999999)
+
+        penalty = abs(x2 - x1) + abs(y2 - y1)
+
+        if y1 == y2:
+            y = y1
+            x_lo, x_hi = min(x1, x2), max(x1, x2)
+            # Check collinear overlap with horizontal segments of other nets
+            for hy, hx1, hx2, hnet in horiz_segs:
+                if hy == y and hnet != net and max(x_lo, hx1) <= min(x_hi, hx2):
+                    return (False, 999999)
+            # Check critical points & component boxes along the segment
+            for x in range(x_lo, x_hi + 16, 16):
+                pt = (x, y)
+                c_owner = critical_pts_by_net.get(pt)
+                if c_owner is not None and c_owner != net:
+                    return (False, 999999)
+                if pt not in (p1, p2):
+                    for bx1, by1, bx2, by2, c_pins in body_boxes:
+                        if bx1 < x < bx2 and by1 < y < by2 and pt not in c_pins:
+                            return (False, 999999)
+                # High penalty for perpendicular wire crossover so global feedback loops route cleanly around stages
+                p_owner = point_to_net.get(pt)
+                if p_owner is not None and p_owner != net:
+                    penalty += 1400
+        else:
+            x = x1
+            y_lo, y_hi = min(y1, y2), max(y1, y2)
+            for vx, vy1, vy2, vnet in vert_segs:
+                if vx == x and vnet != net and max(y_lo, vy1) <= min(y_hi, vy2):
+                    return (False, 999999)
+            for y in range(y_lo, y_hi + 16, 16):
+                pt = (x, y)
+                c_owner = critical_pts_by_net.get(pt)
+                if c_owner is not None and c_owner != net:
+                    return (False, 999999)
+                if pt not in (p1, p2):
+                    for bx1, by1, bx2, by2, c_pins in body_boxes:
+                        if bx1 < x < bx2 and by1 < y < by2 and pt not in c_pins:
+                            return (False, 999999)
+                p_owner = point_to_net.get(pt)
+                if p_owner is not None and p_owner != net:
+                    penalty += 1400
+
+        return (True, penalty)
+
+    def _commit_path(pts_chain: List[Point], net: str) -> None:
+        for i in range(len(pts_chain) - 1):
+            a, b = pts_chain[i], pts_chain[i + 1]
+            if a == b:
+                continue
+            sch.add_wire(a[0], a[1], b[0], b[1])
+            critical_pts_by_net[a] = net
+            critical_pts_by_net[b] = net
+            if a[1] == b[1]:
+                x_lo, x_hi = min(a[0], b[0]), max(a[0], b[0])
+                horiz_segs.append((a[1], x_lo, x_hi, net))
+                for x in range(x_lo, x_hi + 16, 16):
+                    point_to_net[(x, a[1])] = net
+            else:
+                y_lo, y_hi = min(a[1], b[1]), max(a[1], b[1])
+                vert_segs.append((a[0], y_lo, y_hi, net))
+                for y in range(y_lo, y_hi + 16, 16):
+                    point_to_net[(a[0], y)] = net
+
+    def _find_ortho_route(p1: Point, p2: Point, net: str, track_idx: int) -> Optional[List[Point]]:
+        x1, y1 = p1
+        x2, y2 = p2
+        manhattan_d = abs(x2 - x1) + abs(y2 - y1)
+        # 0-bend
+        if x1 == x2 or y1 == y2:
+            ok, c0 = _seg_valid(p1, p2, net)
+            if ok and c0 <= manhattan_d:
+                return [p1, p2]
+        # 1-bend L-route
+        best_1: Optional[Tuple[int, List[Point]]] = None
+        for corner in ((x2, y1), (x1, y2)):
+            if point_to_net.get(corner) not in (None, net):
+                continue
+            ok1, c1 = _seg_valid(p1, corner, net)
+            ok2, c2 = _seg_valid(corner, p2, net)
+            if ok1 and ok2:
+                cost = c1 + c2
+                if best_1 is None or cost < best_1[0]:
+                    best_1 = (cost, [p1, corner, p2])
+        # Return 1-bend immediately only if it has ZERO wire crossovers
+        if best_1 is not None and best_1[0] <= manhattan_d:
+            return best_1[1]
+
+        # 2-bend Z/U-route via candidate x_mid or y_mid
+        best_2: Optional[Tuple[int, List[Point]]] = best_1
+        mid_x = ((x1 + x2) // 32) * 16
+        cand_xs = sorted(
+            {x for x in range(max(16, min(x1, x2) - 160), max(x1, x2) + 176, 16)},
+            key=lambda x: abs(x - mid_x),
+        )
+        for xm in cand_xs:
+            c_a, c_b = (xm, y1), (xm, y2)
+            if point_to_net.get(c_a) not in (None, net) or point_to_net.get(c_b) not in (None, net):
+                continue
+            ok1, k1 = _seg_valid(p1, c_a, net)
+            if not ok1:
+                continue
+            ok2, k2 = _seg_valid(c_a, c_b, net)
+            if not ok2:
+                continue
+            ok3, k3 = _seg_valid(c_b, p2, net)
+            if ok3:
+                cost = k1 + k2 + k3
+                if best_2 is None or cost < best_2[0]:
+                    best_2 = (cost, [p1, c_a, c_b, p2])
+                if cost <= manhattan_d + 64:
+                    break
+
+        mid_y = ((y1 + y2) // 32) * 16
+        _, min_cy, _, max_cy = sch.get_circuit_bounds()
+        cand_ys = sorted(
+            {
+                y
+                for y in list(range(max(16, min(y1, y2) - 160), min(max_cy + 160, max(y1, y2) + 560), 16))
+                + [max(16, min_cy - 32 - track_idx * 16), ((max_cy + 48 + track_idx * 16) // 16) * 16]
+                if y >= 16
+            },
+            key=lambda y: abs(y - mid_y),
+        )
+        for ym in cand_ys:
+            c_a, c_b = (x1, ym), (x2, ym)
+            if point_to_net.get(c_a) not in (None, net) or point_to_net.get(c_b) not in (None, net):
+                continue
+            ok1, k1 = _seg_valid(p1, c_a, net)
+            if not ok1:
+                continue
+            ok2, k2 = _seg_valid(c_a, c_b, net)
+            if not ok2:
+                continue
+            ok3, k3 = _seg_valid(c_b, p2, net)
+            if ok3:
+                cost = k1 + k2 + k3
+                if best_2 is None or cost < best_2[0]:
+                    best_2 = (cost, [p1, c_a, c_b, p2])
+                if cost <= manhattan_d + 64:
+                    break
+
+        if best_2 is not None:
+            return best_2[1]
+
+        # 3-bend fallback via escaped x and top/bottom track
+        for dx1 in (0, 32, -32, 48, -48, 64, -64):
+            for dx2 in (0, 32, -32, 48, -48, 64, -64):
+                xe1, xe2 = x1 + dx1, x2 + dx2
+                if xe1 < 16 or xe2 < 16:
+                    continue
+                for ym in cand_ys[:20]:
+                    chain = [p1, (xe1, y1), (xe1, ym), (xe2, ym), (xe2, y2), p2]
+                    valid_all = True
+                    for idx_s in range(len(chain) - 1):
+                        if chain[idx_s] == chain[idx_s + 1]:
+                            continue
+                        ok_s, _ = _seg_valid(chain[idx_s], chain[idx_s + 1], net)
+                        if not ok_s:
+                            valid_all = False
+                            break
+                    if valid_all:
+                        return chain
+        return None
+
+    # Group flags by signal net
+    flags_by_net: Dict[str, List[FlagLabel]] = {}
+    for fl in sch.flags:
+        if fl.net_name == "0" or _is_power_node(fl.net_name):
+            continue
+        flags_by_net.setdefault(fl.net_name, []).append(fl)
+
+    # Sort signal nets by bounding-box span (local nets first, global feedback nets last)
+    def _net_span(item: Tuple[str, List[FlagLabel]]) -> int:
+        fls = item[1]
+        if len(fls) < 2:
+            return 0
+        xs = [f.x for f in fls]
+        ys = [f.y for f in fls]
+        return (max(xs) - min(xs)) + (max(ys) - min(ys))
+
+    wired_count = 0
+    for track_idx, (net_name, fl_list) in enumerate(sorted(flags_by_net.items(), key=_net_span)):
+        if len(fl_list) < 2:
+            continue
+        # Order flags left-to-right, top-to-bottom
+        fl_sorted = sorted(fl_list, key=lambda f: (f.x, f.y))
+        all_connected = True
+        for i in range(len(fl_sorted) - 1):
+            p1 = (fl_sorted[i].x, fl_sorted[i].y)
+            p2 = (fl_sorted[i + 1].x, fl_sorted[i + 1].y)
+            route = _find_ortho_route(p1, p2, net_name, track_idx)
+            if route is not None:
+                _commit_path(route, net_name)
+            else:
+                all_connected = False
+        if all_connected:
+            wired_count += 1
+            # Keep only ONE flag label on this continuous wired signal net!
+            keep_fl = fl_sorted[0]
+            for extra_fl in fl_sorted[1:]:
+                if extra_fl in sch.flags:
+                    sch.flags.remove(extra_fl)
+            keep_fl.x, keep_fl.y = fl_sorted[0].x, fl_sorted[0].y
+
+    return wired_count
 
 
 def compile_netlist_to_asc(
@@ -629,23 +999,13 @@ def compile_netlist_to_asc(
 ) -> SchematicBuilder:
     """
     Automatically compile any SPICE netlist (`.cir`/`.net`) into a clean, non-overlapping 16px-grid
-    LTspice `.asc` schematic using one of 3 selectable visual layout architectures:
-
-    - `style="A_textbook_wired"`:
-      Groups components into functional columns (Supply/Stimulus -> Series Coupling Caps ->
-      Shunt/Divider Branches -> Transistors & Collector/Emitter Branches -> Shunt Loads),
-      wiring vertically stacked components on the same column and horizontally adjacent series stages,
-      with horizontal net flags and a clean directive footer `>= 160 px` below.
-
-    - `style="B_power_rail_bus"`:
-      Draws a continuous horizontal `VCC` power bus wire across the top (`y = 64`) of the schematic so
-      all pull-up resistors/collectors connect directly to the top `VCC` wire (eliminating repeated
-      `VCC` labels on every branch!), while signal stages flow left-to-right below the bus.
-
-    - `style="C_modular_blocks"`:
-      Organizes the circuit into spacious functional sub-blocks separated by `288 px` horizontally
-      with block title headers (`; === [BLOCO ...] ===`), horizontal port flags on every pin, and
-      a dedicated right-hand simulation dashboard for `.tran` / `.meas` directives.
+    LTspice `.asc` schematic where:
+    - Functional stages are organized left-to-right (Input AC Coupling -> Amplifier/Op-Amp Stages with
+      local feedback networks below -> Bias & Push-Pull Output Stage -> Output Load & Zobel -> Dedicated
+      Power & Decoupling Block).
+    - ALL signal, bias, and feedback nets are connected by physical orthogonal `WIRE` segments (`NC_ = 0`),
+      with a single net label per signal wire.
+    - ONLY power supply rails (`VCC`, `VEE`, `VDD`, `VSS`) and Ground (`0`) use local flags.
     """
     proj = parse_spice_netlist(netlist_or_path)
     comps = list(proj.components.values())
@@ -658,40 +1018,182 @@ def compile_netlist_to_asc(
     return _layout_style_a_textbook_wired(proj, comps, output_asc_path)
 
 
+def _is_dc_power_supply(comp: SpiceNetlistComponent) -> bool:
+    if comp.prefix != "V" or len(comp.nodes) < 2:
+        return False
+    n0, n1 = comp.nodes[0], comp.nodes[1]
+    uval = comp.value.upper()
+    if "SINE" in uval or "PULSE" in uval or "AC " in uval or "PWL" in uval:
+        return False
+    return (_is_power_node(n0) and n1 == "0") or (_is_power_node(n1) and n0 == "0")
+
+
+def _is_decoupling_cap(comp: SpiceNetlistComponent) -> bool:
+    if comp.prefix != "C" or len(comp.nodes) < 2:
+        return False
+    n0, n1 = comp.nodes[0], comp.nodes[1]
+    return (_is_power_node(n0) and n1 == "0") or (_is_power_node(n1) and n0 == "0")
+
+
 def _group_into_functional_columns(comps: List[SpiceNetlistComponent]) -> List[List[SpiceNetlistComponent]]:
     """
-    Partition netlist components into logical left-to-right schematic columns:
-    - Voltage/Current sources get their own left-hand column (up to 2 stacked vertically if supply + signal).
-    - Resistor voltage dividers sharing a midpoint node (`R_top` from VCC to X, `R_bot` from X to GND)
-      are stacked vertically in a single column (`[R_top, R_bot]`)!
-    - BJT (`Q`) with its Collector resistor (`R_C` from VCC to C) and Emitter resistor(s) (`R_E` from E to GND/mid)
-      are grouped into a vertical Transistor Stack column (`[R_C, Q, R_E1, R_E2]`)!
-    - Coupling capacitors (`C` between two non-ground signal nodes) get their own horizontal `R90` column!
-    - Shunt capacitors/resistors/inductors to Ground get their own vertical `R0` column.
+    Partition netlist components into logical left-to-right functional stage columns:
+    1. Signal stimulus (`VIN`) + series coupling (`CIN`) + input termination (`RIN`).
+    2. Op-Amp stages (`XU1`, `XU2`, ...) stacked with their local feedback & compensation passives directly below!
+    3. Diode bias chain (`RBP`, `D1`, `D2`, `RBN`) stacked vertically in a single bias column!
+    4. Complementary push-pull BJT stack (`Q1` NPN, `RE1`, `RE2`, `Q2` PNP) or single BJT stage (`RC`, `Q`, `RE`)!
+    5. Output load (`RLOAD`) and Zobel / RC filter series-shunt branches (`RZ` + `CZ`)!
+    6. Dedicated Power Supply & Decoupling Bank (`VCC`, `VEE`, `CDP`, `CDN`, `CBP`, `CBN`) at the far right!
     """
-    used = set()
+    used: Set[str] = set()
     columns: List[List[SpiceNetlistComponent]] = []
 
-    # 1. Sources first
-    sources = [c for c in comps if c.prefix in ("V", "I")]
-    if len(sources) == 2:
-        columns.append(sources)
-        for s in sources:
-            used.add(s.inst_name)
-    else:
-        for s in sources:
-            columns.append([s])
-            used.add(s.inst_name)
+    # Separate Power Supply & Decoupling components for the final right-hand block
+    power_supplies = [c for c in comps if _is_dc_power_supply(c)]
+    decoupling_caps = [c for c in comps if _is_decoupling_cap(c)]
+    has_active_opamps_or_pushpull = any(c.prefix == "X" for c in comps) or len([c for c in comps if c.prefix == "Q"]) >= 2
 
-    # Walk remaining components in netlist order, forming natural stacks
+    if has_active_opamps_or_pushpull and (power_supplies or decoupling_caps):
+        for pc in power_supplies + decoupling_caps:
+            used.add(pc.inst_name)
+    else:
+        # For small 1-2 transistor or RLC circuits without op-amps/push-pull, keep sources on the left
+        sources = [c for c in comps if c.prefix in ("V", "I")]
+        if len(sources) == 2:
+            columns.append(sources)
+            for s in sources:
+                used.add(s.inst_name)
+        else:
+            for s in sources:
+                columns.append([s])
+                used.add(s.inst_name)
+
+    # Signal sources (if not already placed)
+    for s in [c for c in comps if c.prefix in ("V", "I") and c.inst_name not in used]:
+        columns.append([s])
+        used.add(s.inst_name)
+        # Check for series coupling cap + shunt input resistor right after VIN
+        sig_node = s.nodes[0] if s.nodes[1] == "0" else s.nodes[1]
+        c_in = [
+            c for c in comps
+            if c.inst_name not in used and c.prefix == "C" and sig_node in c.nodes and "0" not in c.nodes
+        ]
+        if c_in:
+            cap_c = c_in[0]
+            columns.append([cap_c])
+            used.add(cap_c.inst_name)
+            nin_node = cap_c.nodes[1] if cap_c.nodes[0] == sig_node else cap_c.nodes[0]
+            r_in = [
+                r for r in comps
+                if r.inst_name not in used and r.prefix == "R" and nin_node in r.nodes and "0" in r.nodes
+                and not any(r2 for r2 in comps if r2.inst_name not in used and r2.prefix == "R" and nin_node in r2.nodes and any(_is_power_node(n) for n in r2.nodes))
+            ]
+            if r_in:
+                columns.append([r_in[0]])
+                used.add(r_in[0].inst_name)
+
+    # Nodes connected to transistors (Q) or >=4 components are stage/global nodes, not internal feedback midpoints
+    q_connected_nodes = {n for c in comps if c.prefix == "Q" for n in c.nodes}
+    node_degree: Dict[str, int] = {}
+    for c in comps:
+        for n in c.nodes:
+            node_degree[n] = node_degree.get(n, 0) + 1
+
+    def _is_internal_fb_node(n: str, out_n: str, in_p: str) -> bool:
+        if n == "0" or _is_power_node(n) or n == out_n or n == in_p:
+            return False
+        if n.upper() in ("OUT", "IN") or n in q_connected_nodes or node_degree.get(n, 0) >= 4:
+            return False
+        return True
+
+    # Op-Amp stages (`X` with 5 pins) + their feedback/compensation components directly below
+    opamps = [c for c in comps if c.prefix == "X" and len(c.nodes) == 5 and c.inst_name not in used]
+    for op in opamps:
+        used.add(op.inst_name)
+        in_p, in_m, _, _, out_n = op.nodes
+        fb_col: List[SpiceNetlistComponent] = [op]
+        direct_fb = [
+            c for c in comps
+            if c.inst_name not in used and c.prefix in ("R", "C")
+            and in_m in c.nodes
+        ]
+        mid_fb_nodes: Set[str] = {in_m}
+        for df in direct_fb:
+            fb_col.append(df)
+            used.add(df.inst_name)
+            for n in df.nodes:
+                if _is_internal_fb_node(n, out_n, in_p):
+                    mid_fb_nodes.add(n)
+        for _ in range(2):
+            sec_fb = [
+                c for c in comps
+                if c.inst_name not in used and c.prefix in ("R", "C")
+                and any(n in mid_fb_nodes for n in c.nodes)
+                and not any(_is_power_node(n) for n in c.nodes)
+                and not any(n in q_connected_nodes for n in c.nodes)
+            ]
+            for sf in sec_fb:
+                fb_col.append(sf)
+                used.add(sf.inst_name)
+                for n in sf.nodes:
+                    if _is_internal_fb_node(n, out_n, in_p):
+                        mid_fb_nodes.add(n)
+        columns.append(fb_col)
+
+    # Diode Bias Column (`RBP`, `D1`, `D2`, `RBN`) if diodes are present
+    diodes = [c for c in comps if c.prefix == "D" and c.inst_name not in used]
+    if len(diodes) >= 2:
+        d_nodes = {n for d in diodes for n in d.nodes}
+        bias_res = [
+            r for r in comps
+            if r.inst_name not in used and r.prefix == "R"
+            and any(n in d_nodes for n in r.nodes)
+            and any(_is_power_node(n) for n in r.nodes)
+        ]
+        r_top_b = [r for r in bias_res if any(n.upper().startswith(("VCC", "VDD", "VP", "+")) for n in r.nodes)]
+        r_bot_b = [r for r in bias_res if r not in r_top_b]
+        bias_col: List[SpiceNetlistComponent] = []
+        for r in r_top_b:
+            bias_col.append(r)
+            used.add(r.inst_name)
+        for d in diodes:
+            bias_col.append(d)
+            used.add(d.inst_name)
+        for r in r_bot_b:
+            bias_col.append(r)
+            used.add(r.inst_name)
+        columns.append(bias_col)
+
+    # Complementary Push-Pull BJT Column (`Q_npn`, `RE1`, `RE2`, `Q_pnp`) if both NPN and PNP exist
+    rem_qs = [c for c in comps if c.prefix == "Q" and c.inst_name not in used]
+    npns = [q for q in rem_qs if q.symbol_type == "npn"]
+    pnps = [q for q in rem_qs if q.symbol_type == "pnp"]
+    if len(npns) == 1 and len(pnps) == 1:
+        q_n, q_p = npns[0], pnps[0]
+        en_node, ep_node = q_n.nodes[2], q_p.nodes[2]
+        re_n = [r for r in comps if r.inst_name not in used and r.prefix == "R" and en_node in r.nodes]
+        re_p = [r for r in comps if r.inst_name not in used and r.prefix == "R" and ep_node in r.nodes]
+        pp_col: List[SpiceNetlistComponent] = [q_n]
+        used.add(q_n.inst_name)
+        for r in re_n:
+            pp_col.append(r)
+            used.add(r.inst_name)
+        for r in re_p:
+            if r.inst_name not in used:
+                pp_col.append(r)
+                used.add(r.inst_name)
+        pp_col.append(q_p)
+        used.add(q_p.inst_name)
+        columns.append(pp_col)
+
+    # Walk remaining signal components, forming natural dividers, BJT stacks, or series-shunt RC/Zobel branches
     for c in comps:
         if c.inst_name in used:
             continue
 
-        # Check if `c` is the top resistor of a bias divider (connected to VCC and some internal node B)
+        # Resistor divider (`R_top` from VCC to mid, `R_bot` from mid to 0)
         if c.prefix == "R" and _is_power_node(c.nodes[0]) and c.nodes[1] != "0":
             mid_node = c.nodes[1]
-            # Look for a bottom resistor from `mid_node` to `0` that isn't a collector resistor of a BJT
             bjt_on_c = [
                 q for q in comps
                 if q.inst_name not in used and q.prefix == "Q" and q.nodes[0] == mid_node
@@ -708,23 +1210,18 @@ def _group_into_functional_columns(comps: List[SpiceNetlistComponent]) -> List[L
                     columns.append([c, r_bot[0]])
                     continue
 
-        # Check if `c` is a BJT (`Q`) or the collector resistor of an unused BJT
+        # Standard BJT stack (`[RC, Q, RE1, RE2]`)
         if c.prefix == "Q" or (
             c.prefix == "R" and any(
                 q.inst_name not in used and q.prefix == "Q" and q.nodes[0] in c.nodes
                 for q in comps
             )
         ):
-            if c.prefix == "Q":
-                q_comp = c
-            else:
-                q_comp = next(
-                    q for q in comps
-                    if q.inst_name not in used and q.prefix == "Q" and q.nodes[0] in c.nodes
-                )
+            q_comp = c if c.prefix == "Q" else next(
+                q for q in comps if q.inst_name not in used and q.prefix == "Q" and q.nodes[0] in c.nodes
+            )
             col_stack: List[SpiceNetlistComponent] = []
             c_node, _, e_node = q_comp.nodes[0], q_comp.nodes[1], q_comp.nodes[2]
-            # Find collector resistor (if any)
             rc_list = [
                 r for r in comps
                 if r.inst_name not in used and r.prefix == "R"
@@ -736,7 +1233,6 @@ def _group_into_functional_columns(comps: List[SpiceNetlistComponent]) -> List[L
             col_stack.append(q_comp)
             used.add(q_comp.inst_name)
 
-            # Find emitter resistor(s) connected to `e_node`
             re1_list = [
                 r for r in comps
                 if r.inst_name not in used and r.prefix == "R" and e_node in r.nodes
@@ -755,12 +1251,32 @@ def _group_into_functional_columns(comps: List[SpiceNetlistComponent]) -> List[L
                     if re2_list:
                         col_stack.append(re2_list[0])
                         used.add(re2_list[0].inst_name)
-
             columns.append(col_stack)
             continue
 
+        # Series R + C to Ground (e.g. Zobel network `RZ` from `OUT` to `ZOBEL` + `CZ` from `ZOBEL` to `0`)
+        if c.prefix == "R" and "0" not in c.nodes and not any(_is_power_node(n) for n in c.nodes):
+            n_a, n_b = c.nodes[0], c.nodes[1]
+            c_zob = [
+                cz for cz in comps
+                if cz.inst_name not in used and cz.prefix == "C"
+                and "0" in cz.nodes and (n_b in cz.nodes or n_a in cz.nodes)
+            ]
+            if c_zob:
+                used.add(c.inst_name)
+                used.add(c_zob[0].inst_name)
+                columns.append([c, c_zob[0]])
+                continue
+
         used.add(c.inst_name)
         columns.append([c])
+
+    # Append dedicated Power Supply & Decoupling column(s) at the end if separated earlier
+    if has_active_opamps_or_pushpull and (power_supplies or decoupling_caps):
+        for ps in power_supplies:
+            rail = ps.nodes[0] if ps.nodes[1] == "0" else ps.nodes[1]
+            rail_caps = [dc for dc in decoupling_caps if rail in dc.nodes]
+            columns.append([ps] + rail_caps)
 
     return columns
 
@@ -770,71 +1286,287 @@ def _layout_style_a_textbook_wired(
     comps: List[SpiceNetlistComponent],
     output_asc_path: str,
 ) -> SchematicBuilder:
-    """Style A: Textbook stage-flow layout with wired vertical stacks and local horizontal flags."""
+    """
+    Style A (Default): Functional stage-flow layout with FULL orthogonal signal wiring (`WIRE`)
+    between components and stages, keeping ONLY power rails (`VCC`, `VEE`, `VDD`, `VSS`) and
+    Ground (`0`) on wireless flags.
+    """
     columns = _group_into_functional_columns(comps)
-    sch = SchematicBuilder(width=max(1408, 240 * (len(columns) + 2)), height=1120)
+    sch = SchematicBuilder(width=max(1600, 288 * (len(columns) + 2)), height=1280)
 
-    col_x = 80
+    col_x = 96
+    power_bank_x: Optional[int] = None
+    power_bank_idx = 0
     for col in columns:
+        # Case 1: Power Rail Bank (`[V_supply, C_dec1, C_dec2, ...]`) — stack dual rails (VCC / VEE) vertically!
+        if len(col) >= 2 and _is_dc_power_supply(col[0]) and all(_is_decoupling_cap(c) for c in col[1:]):
+            if power_bank_x is None:
+                power_bank_x = col_x + 32
+            bx_start = power_bank_x
+            by_base = 176 + power_bank_idx * 368
+            vs = col[0]
+            rail_name = vs.nodes[0] if vs.nodes[1] == "0" else vs.nodes[1]
+            sch.add_directive(
+                f"=== ALIMENTACAO E DESACOPLAMENTO ({rail_name}) ===",
+                x=bx_start,
+                y=by_base - 96,
+                is_comment=True,
+            )
+            rail_y = by_base - 48
+            rail_xs: List[int] = []
+            for idx_p, pc in enumerate(col):
+                px = bx_start + idx_p * 160
+                p = sch.add_component(pc.inst_name, pc.symbol_type, x=px, y=by_base, value=pc.value)
+                top_pt = p.pin("top")
+                bot_pt = p.pin("bot")
+                sch.connect_points(top_pt, (top_pt[0], rail_y), vh_order="VH")
+                rail_xs.append(top_pt[0])
+                sch.ground_pin(bot_pt, stub_dy=32)
+            if len(rail_xs) >= 2:
+                sch.add_wire(min(rail_xs), rail_y, max(rail_xs), rail_y)
+            sch.add_flag((rail_xs[0], rail_y), rail_name, stub_dx=32, stub_dy=0)
+            power_bank_idx += 1
+            col_x = max(col_x, bx_start + 160 * len(col) + 64)
+            continue
+
+        # Case 2: Stacked 2 sources on left column
         if len(col) == 2 and all(c.prefix in ("V", "I") for c in col):
-            # Stacked supply + signal sources on left column
             for s_idx, sc in enumerate(col):
-                sy = 96 + s_idx * 272
+                sy = 144 + s_idx * 288
                 p = sch.add_component(sc.inst_name, sc.symbol_type, x=col_x, y=sy, value=sc.value)
                 n_top, n_bot = sc.nodes[0], sc.nodes[1]
-                sch.power_pin(p.pin("top"), n_top) if n_top != "0" else sch.ground_pin(p.pin("top"), stub_dy=-32)
+                sch.power_pin(p.pin("top"), n_top, stub_dy=-32, stub_dx=32) if n_top != "0" else sch.ground_pin(p.pin("top"), stub_dy=-32)
                 sch.ground_pin(p.pin("bot"), stub_dy=32) if n_bot == "0" else sch.add_flag(p.pin("bot"), n_bot, stub_dy=32, stub_dx=32)
+            col_x += 240
+            continue
+
+        # Case 3: Op-Amp Stage (`XU1` + structured feedback divider & compensation sub-columns below)
+        if col[0].prefix == "X" and len(col[0].nodes) == 5:
+            op_c = col[0]
+            op_name = op_c.inst_name[1:] if op_c.inst_name.upper().startswith("XU") else op_c.inst_name
+            sch.add_directive(f"=== ESTAGIO AMP-OP ({op_name}) ===", x=col_x, y=48, is_comment=True)
+            op_p = sch.add_component(
+                op_name,
+                op_c.symbol_type,
+                x=col_x + 144,
+                y=192,
+                value=op_c.value,
+                prefix="X",
+                allow_custom_symbol=True,
+            )
+            op_p.extra_attrs["SpiceModel"] = f"{op_c.value}.lib"
+            op_p.extra_attrs["Value2"] = op_c.value
+
+            in_p, in_m, v_pos, v_neg, out_n = op_c.nodes
+            sch.add_flag(op_p.pin("1"), in_p, stub_dx=-48, stub_dy=0)
+            sch.add_flag(op_p.pin("2"), in_m, stub_dx=-48, stub_dy=0)
+            sch.power_pin(op_p.pin("3"), v_pos, stub_dy=-48, stub_dx=32)
+            sch.power_pin(op_p.pin("4"), v_neg, stub_dy=48, stub_dx=32)
+            sch.add_flag(op_p.pin("5"), out_n, stub_dx=48, stub_dy=0)
+
+            fb_passives = list(col[1:])
+            gnd_r = [c for c in fb_passives if c.prefix == "R" and "0" in c.nodes]
+            div_chain: List[Tuple[SpiceNetlistComponent, str, str]] = []
+            used_fb: Set[str] = set()
+            if gnd_r:
+                rg = gnd_r[0]
+                used_fb.add(rg.inst_name)
+                fb_junction = rg.nodes[0] if rg.nodes[1] == "0" else rg.nodes[1]
+                div_chain.insert(0, (rg, fb_junction, "0"))
+                cur_top_node = fb_junction
+                for _ in range(2):
+                    up_r = [
+                        c for c in fb_passives
+                        if c.inst_name not in used_fb and c.prefix == "R"
+                        and cur_top_node in c.nodes and in_m not in c.nodes
+                    ]
+                    if not up_r and cur_top_node == in_m:
+                        up_r = [
+                            c for c in fb_passives
+                            if c.inst_name not in used_fb and c.prefix == "R" and cur_top_node in c.nodes
+                        ]
+                    if up_r:
+                        ur = up_r[0]
+                        used_fb.add(ur.inst_name)
+                        nxt_top = ur.nodes[0] if ur.nodes[1] == cur_top_node else ur.nodes[1]
+                        div_chain.insert(0, (ur, nxt_top, cur_top_node))
+                        cur_top_node = nxt_top
+                    else:
+                        break
+
+            # Place main vertical feedback divider chain at `x = col_x + 144` and wire straight top-to-bottom!
+            div_placed: List[Tuple[SpiceNetlistComponent, PlacedComponent, str, str]] = []
+            for d_idx, (dc, n_top_d, n_bot_d) in enumerate(div_chain):
+                dy = 352 + d_idx * 176
+                dp = sch.add_component(dc.inst_name, dc.symbol_type, x=col_x + 144, y=dy, value=dc.value, orientation="R0")
+                div_placed.append((dc, dp, n_top_d, n_bot_d))
+
+            if div_placed:
+                # Top pin of top divider resistor
+                _, p_top_d, n_top_first, _ = div_placed[0]
+                sch.add_flag(p_top_d.pin("top"), n_top_first, stub_dy=-32, stub_dx=32) if n_top_first != "0" else sch.ground_pin(p_top_d.pin("top"), stub_dy=-32)
+                # Wire consecutive divider resistors directly top-to-bottom!
+                for idx_d in range(len(div_placed) - 1):
+                    _, p_up, _, shared_dnet = div_placed[idx_d]
+                    _, p_dn, _, _ = div_placed[idx_d + 1]
+                    b_pt = p_up.pin("bot")
+                    t_pt = p_dn.pin("top")
+                    sch.connect_points(b_pt, t_pt, vh_order="VH")
+                    mid_dy = ((b_pt[1] + t_pt[1]) // 32) * 16
+                    sch.add_flag((b_pt[0], mid_dy), shared_dnet, stub_dx=32, stub_dy=0)
+                # Bottom pin of bottom divider resistor
+                _, p_bot_d, _, n_bot_last = div_placed[-1]
+                sch.ground_pin(p_bot_d.pin("bot"), stub_dy=32) if n_bot_last == "0" else sch.add_flag(p_bot_d.pin("bot"), n_bot_last, stub_dy=32, stub_dx=32)
+
+            # Place remaining auxiliary feedback passives (e.g. RCOMP on left or CF2 on right) with 144px spacing
+            rem_fb = [c for c in fb_passives if c.inst_name not in used_fb]
+            for r_idx, rc in enumerate(rem_fb):
+                if in_m in rc.nodes and rc.prefix == "R":
+                    rx = col_x
+                    ry = 352 + r_idx * 176
+                else:
+                    rx = col_x + 288
+                    ry = 352 + r_idx * 176
+                rp = sch.add_component(rc.inst_name, rc.symbol_type, x=rx, y=ry, value=rc.value, orientation="R0")
+                rn0, rn1 = rc.nodes[0], rc.nodes[1]
+                sch.add_flag(rp.pin("top"), rn0, stub_dy=-32, stub_dx=32) if rn0 != "0" else sch.ground_pin(rp.pin("top"), stub_dy=-32)
+                sch.ground_pin(rp.pin("bot"), stub_dy=32) if rn1 == "0" else sch.add_flag(rp.pin("bot"), rn1, stub_dy=32, stub_dx=32)
+
+            col_x += 432 if rem_fb else 320
+            continue
+
+        # Case 4: Diode Bias Column (`[RBP, D1, D2, RBN]`) wired vertically top-to-bottom!
+        if len(col) >= 3 and any(c.prefix == "D" for c in col):
+            sch.add_directive("=== POLARIZACAO ===", x=col_x, y=64, is_comment=True)
+            cur_y = 112
+            placed_chain: List[Tuple[SpiceNetlistComponent, PlacedComponent]] = []
+            for bc in col:
+                bp = sch.add_component(bc.inst_name, bc.symbol_type, x=col_x, y=cur_y, value=bc.value, orientation="R0")
+                placed_chain.append((bc, bp))
+                cur_y += 176
+
+            # Top pin of first component
+            c_first, p_first = placed_chain[0]
+            sch.power_pin(p_first.pin("top"), c_first.nodes[0], stub_dy=-32, stub_dx=32)
+
+            # Wire consecutive components in the vertical chain directly!
+            for idx_b in range(len(placed_chain) - 1):
+                c_up, p_up = placed_chain[idx_b]
+                c_dn, p_dn = placed_chain[idx_b + 1]
+                shared_net = c_up.nodes[1]
+                bot_pt = p_up.pin("bot")
+                top_pt = p_dn.pin("top")
+                sch.connect_points(bot_pt, top_pt, vh_order="VH")
+                mid_y = ((bot_pt[1] + top_pt[1]) // 32) * 16
+                sch.add_flag((bot_pt[0], mid_y), shared_net, stub_dx=32, stub_dy=0)
+
+            # Bottom pin of last component
+            c_last, p_last = placed_chain[-1]
+            last_net = c_last.nodes[1]
+            if last_net == "0":
+                sch.ground_pin(p_last.pin("bot"), stub_dy=32)
+            else:
+                sch.power_pin(p_last.pin("bot"), last_net, stub_dy=32, stub_dx=32)
+
+            col_x += 256
+            continue
+
+        # Case 5: Complementary Push-Pull Output Stage (`[Q1_npn, RE1, RE2, Q2_pnp]`) wired top-to-bottom!
+        if len(col) == 4 and col[0].prefix == "Q" and col[3].prefix == "Q" and col[1].prefix == "R" and col[2].prefix == "R":
+            q1_c, re1_c, re2_c, q2_c = col[0], col[1], col[2], col[3]
+            sch.add_directive("=== SAIDA PUSH-PULL CLASSE AB ===", x=col_x, y=64, is_comment=True)
+            q1_p = sch.add_component(q1_c.inst_name, "npn", x=col_x, y=144, value=q1_c.value, orientation="R0")
+            re1_p = sch.add_component(re1_c.inst_name, "res", x=col_x + 48, y=304, value=re1_c.value, orientation="R0")
+            re2_p = sch.add_component(re2_c.inst_name, "res", x=col_x + 48, y=464, value=re2_c.value, orientation="R0")
+            # Place PNP in M180 so Emitter is at top (x+64, y-96) and Collector is at bottom (x+64, y)!
+            q2_p = sch.add_component(q2_c.inst_name, "pnp", x=col_x, y=720, value=q2_c.value, orientation="M180")
+
+            # Q1 collector (VCC) & base (BP)
+            sch.power_pin(q1_p.pin("C"), q1_c.nodes[0], stub_dy=-32, stub_dx=32)
+            sch.add_flag(q1_p.pin("B"), q1_c.nodes[1], stub_dx=-48, stub_dy=0)
+
+            # Q1 emitter -> RE1 top (`EP`)
+            sch.connect_points(q1_p.pin("E"), re1_p.pin("top"), vh_order="VH")
+            sch.add_flag((q1_p.pin("E")[0], 288), q1_c.nodes[2], stub_dx=48, stub_dy=0)
+
+            # RE1 bot -> RE2 top (`OUT`)
+            out_net = re1_c.nodes[1] if re1_c.nodes[0] == q1_c.nodes[2] else re1_c.nodes[0]
+            sch.connect_points(re1_p.pin("bot"), re2_p.pin("top"), vh_order="VH")
+            sch.add_flag((re1_p.pin("bot")[0], 432), out_net, stub_dx=48, stub_dy=0)
+
+            # RE2 bot -> Q2 emitter (`EN`)
+            sch.connect_points(re2_p.pin("bot"), q2_p.pin("E"), vh_order="VH")
+            sch.add_flag((re2_p.pin("bot")[0], 592), q2_c.nodes[2], stub_dx=48, stub_dy=0)
+
+            # Q2 base (`BN`) & collector (`VEE`)
+            sch.add_flag(q2_p.pin("B"), q2_c.nodes[1], stub_dx=-48, stub_dy=0)
+            sch.power_pin(q2_p.pin("C"), q2_c.nodes[0], stub_dy=32, stub_dx=32)
+
+            col_x += 288
+            continue
+
+        # Case 6: Series R + Shunt C to Ground (e.g. Zobel network `[RZ, CZ]`) wired vertically!
+        if len(col) == 2 and col[0].prefix == "R" and col[1].prefix == "C" and "0" in col[1].nodes:
+            rz_c, cz_c = col[0], col[1]
+            rz_p = sch.add_component(rz_c.inst_name, "res", x=col_x, y=288, value=rz_c.value, orientation="R0")
+            cz_p = sch.add_component(cz_c.inst_name, "cap", x=col_x, y=464, value=cz_c.value, orientation="R0")
+            mid_net = cz_c.nodes[0] if cz_c.nodes[1] == "0" else cz_c.nodes[1]
+            top_net = rz_c.nodes[0] if rz_c.nodes[1] == mid_net else rz_c.nodes[1]
+            sch.add_flag(rz_p.pin("top"), top_net, stub_dy=-32, stub_dx=32)
+            sch.connect_points(rz_p.pin("bot"), cz_p.pin("top"), vh_order="VH")
+            sch.add_flag((rz_p.pin("bot")[0], 416), mid_net, stub_dx=32, stub_dy=0)
+            sch.ground_pin(cz_p.pin("bot"), stub_dy=32)
             col_x += 224
             continue
 
+        # Case 7: Voltage divider `[R_top, R_bot]` wired vertically
         if len(col) == 2 and all(c.prefix == "R" for c in col):
-            # Voltage divider [R_top, R_bot] wired together vertically with horizontal midpoint flag
             r_top_c, r_bot_c = col[0], col[1]
-            r_top = sch.add_component(r_top_c.inst_name, "res", x=col_x, y=96, value=r_top_c.value)
-            r_bot = sch.add_component(r_bot_c.inst_name, "res", x=col_x, y=352, value=r_bot_c.value)
-            sch.power_pin(r_top.pin("top"), r_top_c.nodes[0])
+            r_top = sch.add_component(r_top_c.inst_name, "res", x=col_x, y=128, value=r_top_c.value)
+            r_bot = sch.add_component(r_bot_c.inst_name, "res", x=col_x, y=384, value=r_bot_c.value)
+            sch.power_pin(r_top.pin("top"), r_top_c.nodes[0], stub_dy=-32, stub_dx=32)
             sch.connect_points(r_top.pin("bot"), r_bot.pin("top"))
             mid_y = ((r_top.pin("bot")[1] + r_bot.pin("top")[1]) // 32) * 16
             sch.add_flag((r_top.pin("bot")[0], mid_y), r_top_c.nodes[1], stub_dx=32, stub_dy=0)
             sch.ground_pin(r_bot.pin("bot"), stub_dy=32) if r_bot_c.nodes[1] == "0" else sch.add_flag(r_bot.pin("bot"), r_bot_c.nodes[1], stub_dy=32, stub_dx=32)
-            col_x += 208
+            col_x += 224
             continue
 
+        # Case 8: Single BJT vertical stack `[optional RC, Q, optional RE1, optional RE2]`
         if any(c.prefix == "Q" for c in col):
-            # Transistor vertical stack: [optional RC, Q, optional RE1, optional RE2]
             q_c = next(c for c in col if c.prefix == "Q")
-            q_placed = sch.add_component(q_c.inst_name, q_c.symbol_type, x=col_x, y=224, value=q_c.value)
+            q_placed = sch.add_component(q_c.inst_name, q_c.symbol_type, x=col_x, y=240, value=q_c.value)
             c_node, b_node, e_node = q_c.nodes[0], q_c.nodes[1], q_c.nodes[2]
             sch.add_flag(q_placed.pin("B"), b_node, stub_dx=-32, stub_dy=0)
 
             rc_items = [c for c in col if c.prefix == "R" and c_node in c.nodes and c.inst_name != q_c.inst_name]
             if rc_items and col.index(rc_items[0]) < col.index(q_c):
                 rc_c = rc_items[0]
-                rc_p = sch.add_component(rc_c.inst_name, "res", x=col_x + 48, y=64, value=rc_c.value)
+                rc_p = sch.add_component(rc_c.inst_name, "res", x=col_x + 48, y=80, value=rc_c.value)
                 top_net = rc_c.nodes[0] if rc_c.nodes[1] == c_node else rc_c.nodes[1]
-                sch.power_pin(rc_p.pin("top"), top_net)
+                sch.power_pin(rc_p.pin("top"), top_net, stub_dy=-32, stub_dx=32)
                 sch.connect_points(rc_p.pin("bot"), q_placed.pin("C"))
-                sch.add_flag((q_placed.pin("C")[0], 208), c_node, stub_dx=48, stub_dy=0)
+                sch.add_flag((q_placed.pin("C")[0], 224), c_node, stub_dx=48, stub_dy=0)
             else:
-                sch.power_pin(q_placed.pin("C"), c_node)
+                sch.power_pin(q_placed.pin("C"), c_node, stub_dy=-32, stub_dx=32)
 
             re_items = [c for c in col if c.prefix == "R" and col.index(c) > col.index(q_c)]
             if len(re_items) == 1:
                 re1_c = re_items[0]
-                re1_p = sch.add_component(re1_c.inst_name, "res", x=col_x + 48, y=384, value=re1_c.value)
+                re1_p = sch.add_component(re1_c.inst_name, "res", x=col_x + 48, y=400, value=re1_c.value)
                 sch.connect_points(q_placed.pin("E"), re1_p.pin("top"))
-                sch.add_flag((q_placed.pin("E")[0], 352), e_node, stub_dx=48, stub_dy=0)
+                sch.add_flag((q_placed.pin("E")[0], 368), e_node, stub_dx=48, stub_dy=0)
                 bot_net = re1_c.nodes[1] if re1_c.nodes[0] == e_node else re1_c.nodes[0]
                 sch.ground_pin(re1_p.pin("bot"), stub_dy=32) if bot_net == "0" else sch.add_flag(re1_p.pin("bot"), bot_net, stub_dy=32, stub_dx=32)
             elif len(re_items) >= 2:
                 re1_c, re2_c = re_items[0], re_items[1]
-                re1_p = sch.add_component(re1_c.inst_name, "res", x=col_x + 48, y=368, value=re1_c.value)
-                re2_p = sch.add_component(re2_c.inst_name, "res", x=col_x + 48, y=544, value=re2_c.value)
+                re1_p = sch.add_component(re1_c.inst_name, "res", x=col_x + 48, y=384, value=re1_c.value)
+                re2_p = sch.add_component(re2_c.inst_name, "res", x=col_x + 48, y=560, value=re2_c.value)
                 sch.connect_points(q_placed.pin("E"), re1_p.pin("top"))
-                sch.add_flag((q_placed.pin("E")[0], 352), e_node, stub_dx=48, stub_dy=0)
+                sch.add_flag((q_placed.pin("E")[0], 368), e_node, stub_dx=48, stub_dy=0)
                 sch.connect_points(re1_p.pin("bot"), re2_p.pin("top"))
                 mid_enet = re1_c.nodes[1] if re1_c.nodes[0] == e_node else re1_c.nodes[0]
-                sch.add_flag((re1_p.pin("bot")[0], 512), mid_enet, stub_dx=48, stub_dy=0)
+                sch.add_flag((re1_p.pin("bot")[0], 528), mid_enet, stub_dx=48, stub_dy=0)
                 bot_net = re2_c.nodes[1] if re2_c.nodes[0] == mid_enet else re2_c.nodes[0]
                 sch.ground_pin(re2_p.pin("bot"), stub_dy=32) if bot_net == "0" else sch.add_flag(re2_p.pin("bot"), bot_net, stub_dy=32, stub_dx=32)
             else:
@@ -843,20 +1575,22 @@ def _layout_style_a_textbook_wired(
             col_x += 256
             continue
 
-        # Single component column
+        # Case 9: Single component column
         c = col[0]
         if c.prefix == "C" and "0" not in c.nodes and not any(_is_power_node(n) for n in c.nodes):
-            # Horizontal series coupling capacitor (`R90`)
-            cp = sch.add_component(c.inst_name, "cap", x=col_x + 64, y=256, value=c.value, orientation="R90")
+            cp = sch.add_component(c.inst_name, "cap", x=col_x + 64, y=192, value=c.value, orientation="R90")
             sch.add_flag(cp.pin("left"), c.nodes[0], stub_dx=-32, stub_dy=0)
             sch.add_flag(cp.pin("right"), c.nodes[1], stub_dx=32, stub_dy=0)
             col_x += 224
         else:
             p = sch.add_component(c.inst_name, c.symbol_type, x=col_x, y=288, value=c.value, orientation="R0")
             n0, n1 = c.nodes[0], c.nodes[1]
-            sch.power_pin(p.pin("top"), n0) if n0 != "0" else sch.ground_pin(p.pin("top"), stub_dy=-32)
+            sch.power_pin(p.pin("top"), n0, stub_dy=-32, stub_dx=32) if n0 != "0" else sch.ground_pin(p.pin("top"), stub_dy=-32)
             sch.ground_pin(p.pin("bot"), stub_dy=32) if n1 == "0" else sch.add_flag(p.pin("bot"), n1, stub_dy=32, stub_dx=32)
             col_x += 208
+
+    # Wire all non-power signal nets orthogonally across stages!
+    wire_signal_nets_on_schematic(sch)
 
     for d in proj.directives:
         sch.add_directive(d)
@@ -872,12 +1606,12 @@ def _layout_style_b_power_rail_bus(
 ) -> SchematicBuilder:
     """
     Style B: Continuous top `VCC` horizontal bus wire at `y = 48` across the entire circuit so
-    all pull-up resistors and collectors wire straight up to the top bus bar (only ONE `VCC` label!).
+    all pull-up resistors and collectors wire straight up to the top bus bar, plus full orthogonal
+    signal net wiring!
     """
     columns = _group_into_functional_columns(comps)
     sch = SchematicBuilder(width=max(1408, 240 * (len(columns) + 2)), height=1120)
 
-    # Identify main positive power rail name (e.g. VCC_12V or VCC)
     power_nodes = [n for c in comps for n in c.nodes if _is_power_node(n)]
     main_vcc = power_nodes[0] if power_nodes else None
     bus_y = 48
@@ -973,6 +1707,8 @@ def _layout_style_b_power_rail_bus(
         sch.add_wire(min_bx, bus_y, max_bx, bus_y)
         sch.add_flag((min_bx + 64, bus_y), main_vcc)
 
+    wire_signal_nets_on_schematic(sch)
+
     for d in proj.directives:
         sch.add_directive(d)
 
@@ -998,8 +1734,25 @@ def _layout_style_c_modular_blocks(
     for idx, c in enumerate(comps):
         col_x = 96 + idx * 256
         row_y = 240
-        p = sch.add_component(c.inst_name, c.symbol_type, x=col_x, y=row_y, value=c.value, orientation="R0")
-        if c.prefix == "Q" and len(c.nodes) >= 3:
+        p = sch.add_component(
+            c.inst_name[1:] if c.prefix == "X" and c.inst_name.upper().startswith("XU") else c.inst_name,
+            c.symbol_type,
+            x=col_x,
+            y=row_y,
+            value=c.value,
+            orientation="R0",
+            prefix="X" if c.prefix == "X" else None,
+            allow_custom_symbol=(c.prefix == "X"),
+        )
+        if c.prefix == "X" and len(c.nodes) == 5:
+            p.extra_attrs["SpiceModel"] = f"{c.value}.lib"
+            p.extra_attrs["Value2"] = c.value
+            sch.add_flag(p.pin("1"), c.nodes[0], stub_dx=-48, stub_dy=0)
+            sch.add_flag(p.pin("2"), c.nodes[1], stub_dx=-48, stub_dy=0)
+            sch.power_pin(p.pin("3"), c.nodes[2], stub_dy=-48, stub_dx=32)
+            sch.power_pin(p.pin("4"), c.nodes[3], stub_dy=48, stub_dx=32)
+            sch.add_flag(p.pin("5"), c.nodes[4], stub_dx=48, stub_dy=0)
+        elif c.prefix == "Q" and len(c.nodes) >= 3:
             sch.power_pin(p.pin("C"), c.nodes[0], stub_dy=-48, stub_dx=32)
             sch.add_flag(p.pin("B"), c.nodes[1], stub_dx=-48, stub_dy=0)
             sch.add_flag(p.pin("E"), c.nodes[2], stub_dy=48, stub_dx=32) if c.nodes[2] != "0" else sch.ground_pin(p.pin("E"), stub_dy=48)
@@ -1012,6 +1765,7 @@ def _layout_style_c_modular_blocks(
 
     sch.save(output_asc_path, auto_sanitize=True)
     return sch
+
 
 
 # ==============================================================================

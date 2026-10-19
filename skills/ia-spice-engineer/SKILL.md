@@ -55,10 +55,16 @@ description: |
 1. Connect all validated blocks into the complete system netlist (`S6`).
 2. Verify that connecting stages does not shift carrier frequency ($<1\%$ pulling) or clip output waveforms, and verify overall DC power budget.
 
-### Phase 6: 16-Pixel Grid `.asc` Compilation & Formal Netlist Verification
-1. Build visual LTspice `.asc` schematics using `ia_spice.asc_compiler.SchematicBuilder`:
-   - Place all symbols on multiples of **16 pixels**.
-   - Attach `FLAG 0` (GND) and supply flags (`VCC`) locally at each vertical branch instead of routing long global wires across the sheet.
+### Phase 6: 16-Pixel Grid `.asc` Compilation, Functional Block Organization & Full Signal Wiring
+1. Compile validated `.cir` netlists into LTspice `.asc` schematics using `ia_spice.ltspice_project.compile_netlist_to_asc(netlist_path, output_asc_path, style="A_textbook_wired")` (or CLI `ia-spice netlist-to-asc <file.cir> --style A_textbook_wired --verify`):
+   - **NEVER place components in isolated columns connected only by `FLAG` text labels.**
+   - **Connect 100% of signal, bias, and feedback nets using physical orthogonal `WIRE` segments** (`wire_signal_nets_on_schematic`), keeping **ONLY** power supply rails (`VCC`, `VEE`, `VDD`, `VSS`) and Ground (`0`) on local flags.
+   - Organize functional stages left-to-right so the schematic is immediately readable by an engineer:
+     1. Input AC source + series coupling capacitor + input bias/termination;
+     2. Amplifier / Op-Amp stages (`XU1`, `XU2`, etc.) with their feedback dividers and compensation networks positioned directly underneath each stage;
+     3. Diode bias chains (`RBP-D1-D2-RBN`) and complementary Push-Pull output stages (`Q1` NPN `R0`, `RE1`, `RE2`, `Q2` PNP `M180`) wired vertically top-to-bottom;
+     4. Output load (`RLOAD`) and Zobel / RC filter networks;
+     5. Dedicated Power Supply & Decoupling Block (`VCC`, `VEE`, `CDP`, `CDN`, `CBP`, `CBN`) at the right.
 2. **Mandatory Formal Verification (`ia_spice.netlist_verifier.verify_asc_netlist`)**:
    - Compile every `.asc` via `LTspice.exe -netlist`.
    - Assert **`unconnected_pins == []` (`NC_ = 0`)**.
