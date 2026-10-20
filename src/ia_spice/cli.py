@@ -153,6 +153,74 @@ def cmd_netlist_to_asc(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_size_block(args: argparse.Namespace) -> int:
+    import dataclasses
+    from .sizing import (
+        size_l_matching_network,
+        size_mosfet_stage,
+        size_opamp_stage,
+        size_passive_filter,
+        size_sallen_key_filter,
+        size_voltage_divider,
+    )
+
+    btype = args.block_type.lower()
+    if btype == "opamp":
+        res = size_opamp_stage(
+            target_gain_vv=float(args.gain),
+            topology=args.topology or "non_inverting",
+            r_input_target=parse_spice_value(args.rin) if args.rin else 10e3,
+            gbw_hz=parse_spice_value(args.gbw) if args.gbw else 10e6,
+            series=args.series or "E24",
+        )
+    elif btype == "divider":
+        res = size_voltage_divider(
+            v_in=float(args.vin),
+            v_out_target=float(args.vout),
+            r_total_target=parse_spice_value(args.rtotal) if args.rtotal else 20e3,
+            series=args.series or "E24",
+        )
+    elif btype == "filter":
+        res = size_passive_filter(
+            f_cutoff_hz=parse_spice_value(args.fc),
+            filter_type=args.filter_type or "rc_lowpass",
+            r_characteristic=parse_spice_value(args.r) if args.r else 1000.0,
+            q_factor=float(args.q) if args.q else 5.0,
+            series=args.series or "E24",
+        )
+    elif btype in ("sallen-key", "sallen_key"):
+        res = size_sallen_key_filter(
+            f_cutoff_hz=parse_spice_value(args.fc),
+            q_factor=float(args.q) if args.q else 0.7071,
+            c_base=parse_spice_value(args.c) if args.c else 10e-9,
+            series=args.series or "E24",
+        )
+    elif btype == "mosfet":
+        res = size_mosfet_stage(
+            v_dd=float(args.vdd),
+            r_g1=parse_spice_value(args.rg1),
+            r_g2=parse_spice_value(args.rg2),
+            r_d=parse_spice_value(args.rd),
+            r_s=parse_spice_value(args.rs),
+            k_p=parse_spice_value(args.kp) if args.kp else 2e-3,
+            v_th=float(args.vth) if args.vth else 1.5,
+            topology=args.topology or "CS",
+        )
+    elif btype in ("l-match", "l_match"):
+        res = size_l_matching_network(
+            r_source=float(args.rsource),
+            r_load=float(args.rload),
+            f_0_hz=parse_spice_value(args.f0),
+            series=args.series or "E24",
+        )
+    else:
+        print(f"Unknown block type: {btype}", file=sys.stderr)
+        return 1
+
+    print(json.dumps(dataclasses.asdict(res), indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ia-spice",
@@ -167,6 +235,33 @@ def build_parser() -> argparse.ArgumentParser:
     p_snap.add_argument("value", help="Target value (e.g. 10.83k, 211p, 4.7u)")
     p_snap.add_argument("--series", default="E24", choices=["E12", "E24", "E96"])
     p_snap.set_defaults(func=cmd_snap)
+
+    p_size = sub.add_parser("size-block", help="Analytically size Op-Amp, Filter, Sallen-Key, MOSFET, L-Match, or Divider")
+    p_size.add_argument("block_type", choices=["opamp", "divider", "filter", "sallen-key", "mosfet", "l-match"])
+    p_size.add_argument("--gain", default=None, help="Target gain in V/V (for opamp)")
+    p_size.add_argument("--topology", default=None, help="Topology (e.g. non_inverting, inverting, CS, CD)")
+    p_size.add_argument("--rin", default=None, help="Input resistor target (e.g. 10k)")
+    p_size.add_argument("--gbw", default=None, help="Op-amp gain-bandwidth product in Hz")
+    p_size.add_argument("--vin", default=None, help="Input voltage for divider")
+    p_size.add_argument("--vout", default=None, help="Target output voltage for divider")
+    p_size.add_argument("--rtotal", default=None, help="Target total divider resistance")
+    p_size.add_argument("--fc", default=None, help="Cutoff frequency in Hz (e.g. 10k, 1meg)")
+    p_size.add_argument("--filter-type", default="rc_lowpass", help="Passive filter type (rc_lowpass, rlc_series_bandpass, etc.)")
+    p_size.add_argument("--r", default=None, help="Filter characteristic resistance")
+    p_size.add_argument("--q", default=None, help="Quality factor Q")
+    p_size.add_argument("--c", default=None, help="Base capacitance")
+    p_size.add_argument("--vdd", default=None, help="Supply voltage VDD for MOSFET")
+    p_size.add_argument("--rg1", default=None, help="MOSFET gate pull-up resistor RG1")
+    p_size.add_argument("--rg2", default=None, help="MOSFET gate pull-down resistor RG2")
+    p_size.add_argument("--rd", default=None, help="MOSFET drain resistor RD")
+    p_size.add_argument("--rs", default=None, help="MOSFET source resistor RS")
+    p_size.add_argument("--kp", default=None, help="MOSFET transconductance parameter Kp")
+    p_size.add_argument("--vth", default=None, help="MOSFET threshold voltage Vth")
+    p_size.add_argument("--rsource", default=None, help="L-match source impedance")
+    p_size.add_argument("--rload", default=None, help="L-match load impedance")
+    p_size.add_argument("--f0", default=None, help="Center / resonant frequency")
+    p_size.add_argument("--series", default="E24", choices=["E12", "E24", "E96"])
+    p_size.set_defaults(func=cmd_size_block)
 
     p_sim = sub.add_parser("sim", help="Run a .cir or .asc file in LTspice batch mode and parse .meas")
     p_sim.add_argument("circuit", help="Path to .cir or .asc file")

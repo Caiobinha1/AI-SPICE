@@ -36,6 +36,13 @@ class TestStep5CLIAndMCP(unittest.TestCase):
         data = json.loads(buf_snap.getvalue())
         self.assertEqual(data["snapped_spice"], "11k")
 
+        buf_size = io.StringIO()
+        with redirect_stdout(buf_size):
+            rc3 = cli_main(["size-block", "opamp", "--gain", "10", "--topology", "non_inverting"])
+        self.assertEqual(rc3, 0)
+        size_data = json.loads(buf_size.getvalue())
+        self.assertAlmostEqual(size_data["actual_gain_vv"], 10.1, delta=0.2)
+
     def test_cli_sim_and_verify_asc(self):
         sch = SchematicBuilder(width=640, height=480)
         v1 = sch.add_component("V1", "voltage", x=96, y=160, value="10")
