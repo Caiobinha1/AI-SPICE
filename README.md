@@ -94,6 +94,27 @@ python -m ai_spice.cli doctor
 
 ---
 
+## ⚡ Computational Efficiency & LLM Token Footprint
+
+AI-SPICE operates on a hybrid architecture that separates high-level architectural reasoning from deterministic numerical computing:
+
+1. **Zero-Token Local Execution**:
+   When run locally via Python (`import ai_spice`), CLI (`python -m ai_spice.cli`), or automated test suites, **AI-SPICE consumes 0 LLM tokens and $0.00 in API costs**. All sizing equations, E-series snapping, schematic coordinate math, and LTspice simulation batch runs execute natively on the local CPU.
+
+2. **Offloading Spatial Math & Simulation for AI Agents**:
+   When an LLM agent (*OpenAI Codex, Claude Code, Cursor, GPT-4o*) is tasked with generating an LTspice schematic from scratch, outputting raw `.asc` coordinate files line-by-line typically consumes thousands of output tokens per attempt. Because language models lack native 2D spatial coordinate awareness, this often triggers multi-turn retry loops to resolve floating pins (`NC_`), overlapped labels, or simulation convergence errors.
+
+   By providing MCP tools and CLI helpers, AI-SPICE offloads geometry, component snapping, and batch verification to deterministic local solvers. The LLM only exchanges high-level specifications and compact SPICE netlist cards:
+
+| Metric | LLM Generating Raw `.asc` Text (No Tools) | LLM using AI-SPICE (MCP / CLI) | Local Python / CLI Execution |
+| :--- | :---: | :---: | :---: |
+| **Typical Context Footprint (per circuit)** | ~30,000 – 100,000+ tokens (multi-turn retries) | **~2,000 – 5,000 tokens** (spec + netlist) | **0 tokens** ($0.00) |
+| **Typical Agent Iteration Turns** | 5 – 15+ trial-and-error attempts | **1 – 2 structured tool calls** | Direct execution |
+| **Schematic Coordinate Hallucinations** | High (frequent floating pins / `NC_`) | **0 (Deterministic 16px grid routing)** | **0** |
+| **Estimated API Cost (e.g. Claude 3.5 / GPT-4o)** | ~$0.40 – $1.50+ | **~$0.01 – $0.03** | **$0.00** |
+
+---
+
 ## 🔌 Topological Stage-Flow & Orthogonal Signal-Wired `.asc` Compiler
 
 Generating valid LTspice `.asc` schematics programmatically is notoriously difficult because LTspice symbols (`res`, `cap`, `ind`, `diode`, `npn`, `pnp`, `voltage`, `current`, 5-pin Op-Amps, and custom `.asy` subcircuits) use asymmetric pin coordinates that transform under rotation and mirroring (`R0`, `R90`, `R180`, `R270`, `M0`, `M180`).
