@@ -2,198 +2,185 @@
 
 # ⚡ AI-SPICE
 
-**Equation-Grounded AI Analog & RF Circuit Engineering Framework with Closed-Loop LTspice Verification, Vision-to-SPICE Reconstruction, and Full Orthogonal Signal-Wired `.asc` Schematic Compilation.**
+**Universal Autonomous AI Framework for Electronic Circuit Design, First-Principles Analytical Sizing, Closed-Loop LTspice Verification, Vision-to-SPICE Reconstruction, and Orthogonal Signal-Wired `.asc` Schematic Compilation.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-3776AB.svg)](pyproject.toml)
-[![Simulator: LTspice 24](https://img.shields.io/badge/Simulator-LTspice%2024%20%2F%20XVII-dc2626.svg)](#)
-[![MCP Server: 7 Tools](https://img.shields.io/badge/MCP-JSON--RPC%202.0-16a34a.svg)](src/ai_spice/mcp_server.py)
-[![Tests: 35 Passed](https://img.shields.io/badge/Tests-35%2F35%20Passing-10b981.svg)](tests/)
+[![Simulator: LTspice 24 / XVII](https://img.shields.io/badge/Simulator-LTspice%2024%20%2F%20XVII-dc2626.svg)](#)
+[![MCP Server: JSON-RPC 2.0](https://img.shields.io/badge/MCP-JSON--RPC%202.0-16a34a.svg)](src/ai_spice/mcp_server.py)
+[![Tests: Passing](https://img.shields.io/badge/Verification-Closed--Loop%20SPICE-10b981.svg)](tests/)
 [![LLMs.txt](https://img.shields.io/badge/AI%20Discovery-llms.txt-8b5cf6.svg)](llms.txt)
 [![Leia em Português](https://img.shields.io/badge/Idioma-Portugu%C3%AAs%20(BR)-f59e0b.svg)](README.pt-BR.md)
 
-[**🚀 Quickstart**](#-quickstart-60-seconds) · [**🤖 For AI Agents**](#-for-ai-agents--llm-discovery-codex--claude-code--cursor--gemini) · [**🏛️ Architecture**](#️-closed-loop-architecture) · [**🔌 Wired `.asc` Compiler**](#-functional-block--orthogonal-signal-wired-asc-compiler) · [**📊 Verified Benchmarks**](#-verified-circuit-benchmarks-showcase) · [**📸 Vision-to-SPICE**](#-vision-to-spice-schematic-photo-reconstruction)
+[**🏛️ System Architecture**](#️-system-architecture) · [**🌐 Supported Domains**](#-supported-engineering-domains--analyses) · [**🤖 For AI Agents & MCP**](#-for-ai-agents--llm-discovery) · [**🔌 Topological `.asc` Compiler**](#-topological-stage-flow--orthogonal-signal-wired-asc-compiler) · [**📸 Vision-to-SPICE**](#-vision-to-spice-multi-modal-schematic-reconstruction) · [**🚀 Quickstart**](#-quickstart)
 
 </div>
 
 ---
 
-## 💡 Why Does AI-SPICE Exist? (And Why Standard AI Circuit Attempts Fail)
+## 💡 Overview
 
-When engineers or students ask a standard LLM (*ChatGPT, Claude, Gemini, Codex*) to *"Design an FM transmitter, filter, or Class-AB audio amplifier in LTspice"*, the output almost always fails in simulation:
-1. **Zero Analytical Grounding**: The LLM guesses resistor and capacitor values directly inside a monolithic netlist without solving DC operating points ($V_{CE}, I_C, g_m$), tank resonance, or commercial **E12/E24/E96** tolerances.
-2. **Inter-Stage Loading Collapse**: Connecting Stage $N+1$ (e.g., an RF preamplifier or a $50\,\Omega / 8\,\Omega$ load) directly to Stage $N$ collapses loop/voltage gain by $>90\%$ and kills oscillation ($g_m R_p < 1$).
-3. **Broken or Disconnected `.asc` Schematics**: Asking an LLM to generate LTspice `.asc` files directly produces either off-grid floating pins (`NC_01`), overlapping text, or unreadable grids of isolated components connected only by `FLAG` text labels.
+**AI-SPICE** bridges the gap between Large Language Models (*OpenAI Codex, Claude Code, Cursor, Gemini, Copilot*) and industrial-grade **SPICE / LTspice electronic engineering**.
 
-**AI-SPICE solves all three problems** by combining first-principles analytical equations, stage-by-stage impedance contracts (`StageContract`), headless `LTspice.exe` verification, physics-based failure diagnostics, and a **16-pixel grid `.asc` compiler that groups circuits into left-to-right functional blocks and connects 100% of signal, bias, and feedback paths with physical orthogonal `WIRE` segments (`NC_ = 0`)**, leaving only power rails (`VCC`, `VEE`) and Ground (`0`) on local flags.
+When standard LLMs are asked to design or modify electronic circuits directly, they hallucinate component values without solving physical equations, ignore inter-stage impedance loading across cascaded blocks, and fail to generate valid visual LTspice `.asc` schematics—resulting in floating pins (`NC_`), short-circuited wires, or unreadable clouds of disconnected net labels.
+
+**AI-SPICE transforms any AI agent into a rigorous, closed-loop hardware engineering workstation:**
+1. **First-Principles Analytical Synthesis**: Computes DC operating points, small-signal transfer functions $H(s)$, frequency-domain pole-zero placement, stability & feedback margins, power/thermal budgets, and commercial **E-series (`E12 / E24 / E96`)** component quantization before generating SPICE code.
+2. **Hierarchical Inter-Stage Impedance Contracts (`StageContract`)**: Models arbitrary multi-stage systems with explicit input/output impedance boundaries ($Z_{\text{in}}, Z_{\text{out}}$), preventing loading collapse and automatically synthesizing isolation or matching stages when required.
+3. **Closed-Loop Headless LTspice Verification & Physics Diagnostics**: Executes batch simulations (`.op`, `.dc`, `.ac`, `.tran`, `.step`, `.meas`), parses telemetry logs deterministically, diagnoses physical failure modes, and iterates autonomously until all target specifications converge.
+4. **Topological 16-Pixel Grid `.asc` Compiler & Orthogonal Router**: Compiles any SPICE netlist (`.cir` / `.net`) or vision graph into a textbook-grade LTspice `.asc` schematic—partitioning functional stages left-to-right and connecting **100% of signal, bias, and feedback paths with physical orthogonal `WIRE` segments (`NC_ = 0`)**, while keeping power rails (`VCC`, `VEE`, `VDD`, `VSS`) and Ground (`0`) on clean local flags.
 
 ---
 
-## 🤖 For AI Agents & LLM Discovery (Codex / Claude Code / Cursor / Gemini)
+## 🏛️ System Architecture
 
-> **Are you an AI coding agent searching for a tool to create, simulate, debug, or convert LTspice schematics (`.asc`) and SPICE netlists (`.cir`)?**
-> This repository includes native self-configuration files for every major AI agent:
-> - **OpenAI Codex / Jules / ChatGPT**: [`AGENTS.md`](AGENTS.md)
-> - **Claude Code (`claude`)**: [`CLAUDE.md`](CLAUDE.md)
+```mermaid
+flowchart TD
+    subgraph INPUT["1. Multi-Modal Input & Specification Layer"]
+        direction TB
+        I1["📋 Natural Language Specs\nTarget Gain, BW, f0, Pout, Z, THD"]
+        I2["📸 Vision-to-SPICE Input\nHand-Drawn Sketches, Photos, Datasheets"]
+        I3["📂 Existing SPICE / LTspice Projects\n.asc, .cir, .net, .lib, .sub, .asy, .plt"]
+    end
+
+    subgraph ENGINE["2. First-Principles Analytical & Topological Synthesis Engine"]
+        direction TB
+        S1["📐 Analytical Equation Solver\n• Operating Point & Bias Synthesis\n• Transfer Function & Pole-Zero Placement\n• Resonance, Stability & Feedback Margins\n• Commercial E12 / E24 / E96 Quantization"]
+        S2["🔗 Hierarchical StageContract Verifier\n• Multi-Stage Cascade Decomposition\n• Bidirectional Impedance Auditing (Zin / Zout)\n• Automated Buffer & Matching Synthesis"]
+        S3["🎨 Topological 16px .asc Schematic Compiler\n• Left-to-Right Functional Stage Grouping\n• Orthogonal Manhattan Signal Wire Router\n• Native & Custom .asy Symbol Pin Calibration\n• Geometric DRC & Auto-Footer Directives"]
+        S1 --> S2 --> S3
+    end
+
+    subgraph LOOP["3. Closed-Loop Headless SPICE Verification & Diagnostics"]
+        direction TB
+        V1["🔍 Formal Netlist Isomorphism Gate\nLTspice -netlist Connectivity Audit (NC_ = 0)"]
+        V2["⚙️ Headless Batch Simulation Engine\n.op / .dc / .ac / .tran / .step / .meas Execution"]
+        V3["📊 Deterministic Telemetry & .log Parser\nScalar, Stepped, dB/Phase & Time-Domain Extraction"]
+        V4{"✅ All Physical & Spec\nTargets Converged?"}
+        V5["🩺 Physics-Based Failure Diagnostics\nBias Saturation/Cutoff, Loading Collapse,\nGain/Loop Deficit, Frequency Drift, Instability"]
+        V1 --> V2 --> V3 --> V4
+        V4 -- "No (Closed-Loop Refinement)" --> V5
+    end
+
+    subgraph OUTPUT["4. Verified Engineering Deliverables"]
+        direction TB
+        O1["🔌 Publication-Grade Wired .asc Schematic\n+ Configured .plt Waveform Layouts"]
+        O2["📜 Self-Contained .cir / .net SPICE Netlists\n+ Vendor .lib / .sub Macro-Models"]
+        O3["📈 Technical Design & Verification Reports\nSpec-vs-Measured Tables, Plots & Testbench Guides"]
+    end
+
+    INPUT --> ENGINE
+    S3 --> V1
+    V5 -. "Automated Parameter & Topology Adjustment" .-> S1
+    V4 -- "Yes (Verified)" --> OUTPUT
+```
+
+---
+
+## 🌐 Supported Engineering Domains & Analyses
+
+AI-SPICE is architected as a **domain-agnostic electronic engineering platform** supporting discrete, integrated, and macro-model circuit topologies across all standard SPICE simulation domains:
+
+| Engineering Domain | Representative Topologies & Building Blocks | Supported SPICE Verification & `.meas` Telemetry |
+| :--- | :--- | :--- |
+| **Analog & Precision Signal Conditioning** | Multi-stage discrete & Op-Amp amplifiers, instrumentation & differential front-ends, transimpedance (TIA) & charge amplifiers, active filters (Sallen-Key, MFB, State-Variable), current mirrors | `.op`, `.dc`, `.ac`, `.tran` — DC bias auditing, open/closed-loop gain, phase margin, CMRR, bandwidth ($f_L, f_H$), input/output impedance |
+| **RF, High-Frequency & Wireless** | Harmonic & relaxation oscillators (VCOs, Colpitts, Hartley, Clapp, Pierce), varactor tuning networks, PLL building blocks, LNAs, mixers, RF preamplifiers, $50\,\Omega$ buffers, LC/RLC matching networks | `.tran ... startup`, `.ac`, FFT/harmonic extraction — carrier frequency $f_0$, tuning sensitivity, startup margin, harmonic suppression, RF output power |
+| **Audio & Power Amplification** | Low-noise preamplifiers, active tone/equalization stages, voltage amplifier stages (VAS), diode/$V_{BE}$-multiplier bias chains, complementary push-pull Class-A / Class-AB output stages, Zobel & Boucherot networks | `.tran`, `.ac`, `.four` — RMS load power, peak-to-peak swing, crossover distortion, quiescent current, slew-rate & compensation stability |
+| **Passive & Active Filter Synthesis** | Low-pass, high-pass, band-pass, band-stop / notch filters (RC, RL, series/parallel RLC, LC ladders, cascaded active stages) | `.ac dec` — center/cutoff frequencies ($f_0, f_{-3\text{dB}}$), quality factor $Q$, passband insertion loss, stopband attenuation (dB) |
+| **Power Management & Regulation** | Linear regulators, LDO topologies, shunt/series voltage references, over-current protection, decoupling & ripple-filtering banks, switching stage primitives | `.dc`, `.tran`, `.step param` — line/load regulation, dropout voltage, transient step response, power dissipation & efficiency ($\eta$) |
+| **Multi-Modal Vision & Legacy Refactoring** | Incomplete textbook diagrams, whiteboard sketches, photographed schematics, legacy netlists (`.cir`), and unorganized `.asc` files | `ask_user` interactive parameter audit, `autonomous` equation-based completion, `.cir` $\leftrightarrow$ `.asc` compilation, and automatic schematic wire routing |
+
+---
+
+## 🏆 Ecosystem Comparison (2024–2026)
+
+| Tool / Framework | Primary Scope | Analytical Sizing & Commercial E-Series | Multi-Stage Impedance Contracts | Closed-Loop LTspice `.meas` Verification | Vision-to-SPICE Reconstruction | Full `.asc`/`.cir`/`.asy`/`.plt` Project AST | Topological Signal-Wired `.asc` Compiler (`NC_ = 0`) |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **⚡ AI-SPICE (This Repo)** | **Universal AI Circuit Engineering Framework** | ✅ **Yes (Multi-Domain Equations + E12–E96)** | ✅ **Yes (`StageContract`)** | ✅ **Yes (Automated Loop + Diagnostics)** | ✅ **Yes (`ask_user` & `autonomous`)** | ✅ **Yes (All 8 LTspice Formats)** | ✅ **Yes (Topological Blocks + Orthogonal Wiring + DRC)** |
+| `PyLTSpice` / `spicelib` | Python Simulation Wrapper | ❌ No | ❌ No | ✅ Yes | ❌ No | ⚠️ Partial | ❌ No (No schematic synthesis) |
+| `SKiDL` / `atopile` | Hardware-as-Code PCB DSL | ❌ No | ❌ No | ❌ No | ❌ No | ❌ (KiCad PCB focus) | ❌ No |
+| `ltspice-mcp` Wrappers | Basic CLI-to-MCP Bridge | ❌ No | ❌ No | ✅ Yes | ❌ No | ⚠️ Basic | ❌ No |
+| `AnalogCoder` / Academic Agents | Netlist-Only Script Generators | ❌ No (Black-box search) | ❌ No | ❌ (`PySpice` only) | ❌ No | ❌ No | ❌ No |
+
+---
+
+## 🤖 For AI Agents & LLM Discovery
+
+> **Are you an AI coding agent (*OpenAI Codex, Claude Code, Cursor, Windsurf, Gemini, GitHub Copilot*) tasked with designing, simulating, debugging, or generating LTspice schematics (`.asc`) and SPICE netlists (`.cir`)?**
+>
+> This repository provides native auto-discovery manifests and instruction protocols for every major agentic workflow:
+> - **OpenAI Codex / ChatGPT / Jules**: [`AGENTS.md`](AGENTS.md)
+> - **Anthropic Claude Code**: [`CLAUDE.md`](CLAUDE.md)
 > - **Cursor IDE**: [`.cursorrules`](.cursorrules)
 > - **GitHub Copilot**: [`.github/copilot-instructions.md`](.github/copilot-instructions.md)
-> - **LLM Search / RAG Index**: [`llms.txt`](llms.txt)
-> - **MCP Registry Manifest**: [`mcp.json`](mcp.json) & [`smithery.yaml`](smithery.yaml)
+> - **LLM Search & RAG Index**: [`llms.txt`](llms.txt)
+> - **Model Context Protocol (MCP) Manifests**: [`mcp.json`](mcp.json) & [`smithery.yaml`](smithery.yaml)
 
-### One-Command Bootstrap for Autonomous AI Agents
+### Instant Agent Bootstrap
 ```bash
 git clone https://github.com/Caiobinha1/AI-SPICE.git
 cd AI-SPICE && pip install -e .
 python -m ai_spice.cli doctor
 ```
 
-Once installed, any AI agent can convert a SPICE netlist (`.cir`) into a verified, functionally grouped, physically wired LTspice `.asc` schematic in one command:
+---
+
+## 🔌 Topological Stage-Flow & Orthogonal Signal-Wired `.asc` Compiler
+
+Generating valid LTspice `.asc` schematics programmatically is notoriously difficult because LTspice symbols (`res`, `cap`, `ind`, `diode`, `npn`, `pnp`, `voltage`, `current`, 5-pin Op-Amps, and custom `.asy` subcircuits) use asymmetric pin coordinates that transform under rotation and mirroring (`R0`, `R90`, `R180`, `R270`, `M0`, `M180`).
+
+`AI-SPICE` includes a dedicated **Topological Schematic Synthesis & Manhattan Routing Engine** (`compile_netlist_to_asc` and `beautify_asc_file`) that guarantees:
+1. **Left-to-Right Signal-Flow Partitioning**:
+   - Traces signal topology from input stimuli through series coupling/filtering networks, bias dividers, active amplification/oscillation/regulation stages, and output loads, placing power supply and decoupling banks in a dedicated right-hand region.
+2. **Textbook Geometric Conventions**:
+   - Series signal-path passives (`R`, `L`, `C` bridging adjacent signal nodes) are automatically oriented **horizontally (`R90`)** with pin polarity aligned to left-to-right signal flow so wires never loop backward.
+   - Shunt passives to ground are oriented **vertically (`R0`)**.
+   - Multi-resistor bias dividers (`2-` or `3-resistor` chains), capacitive dividers, diode bias strings, and complementary push-pull stages (`NPN` + mirrored `M180 PNP`) are stacked vertically on aligned column axes.
+   - Multi-pin Op-Amp subcircuits (`Prefix X`) are placed with their local feedback and frequency-compensation networks structured directly beneath each stage.
+3. **100% Orthogonal Manhattan Signal Wiring (`wire_signal_nets_on_schematic`)**:
+   - Connects all non-power signal, bias, and feedback nets using physical orthogonal `WIRE` segments on the 16-pixel grid (`NC_ = 0`), retaining a single clean net label per continuous wire.
+   - Enforces protective bounding boxes around component bodies, symbol text, and power flags so routed wires never cause accidental short circuits or visual overlaps.
+   - Keeps power rails (`VCC`, `VEE`, `VDD`, `VSS`) and Ground (`0`) on local horizontal flag tabs, and places all SPICE directives (`.tran`, `.ac`, `.meas`, `.include`, `.lib`, `.model`) in a clean footer $\ge 160\text{ px}$ below the circuit.
+
+---
+
+## 📸 Vision-to-SPICE: Multi-Modal Schematic Reconstruction
+
+When given a photograph, textbook diagram, datasheet application circuit, or hand-drawn sketch—even with missing or illegible component values (`?`)—`ai_spice.vision_to_spice` supports two operational modes:
+- **`mode="ask_user"` (Interactive Engineering Audit)**: Detects every missing value, model, or supply parameter, computes an analytical **E24** recommendation with physical justification, and generates a structured audit table for user confirmation.
+- **`mode="autonomous"` (Full Autonomous Synthesis)**: Solves all missing parameters from first principles, compiles both the `.cir` netlist and a fully wired 16-pixel grid `.asc` schematic (`NC_ = 0`), and validates performance in LTspice.
+
+---
+
+## 🛠️ Universal LTspice Project AST & CLI Toolkit
+
+AI-SPICE provides programmatic Python APIs, CLI commands, and MCP tools for all 8 LTspice file formats (`.asc`, `.cir`/`.net`/`.sp`, `.sub`/`.lib`, `.asy`, `.plt`, `.log`):
+
 ```bash
-python -m ai_spice.cli netlist-to-asc circuit.cir circuit.asc --style A_textbook_wired --verify
-```
-
----
-
-## 🏛️ Closed-Loop Architecture
-
-```mermaid
-flowchart LR
-    A["🎯 Input Source\n• Design Spec\n• Schematic Photo\n• Existing .asc/.cir"] --> B["📐 Analytical Sizing\n• BJT DC/AC Solver\n• Colpitts & Barkhausen\n• E12/E24/E96 Snapping"]
-    B --> C["🔗 StageContract\n• Z_in / Z_out Check\n• Buffer Insertion"]
-    C --> D["🎨 16px Wired .asc Compiler\n• Functional Stage Blocks\n• Orthogonal Signal Wires\n• Auto-Footer Directives"]
-    D --> E["⚙️ LTspice 24 Headless\n• -netlist (NC_ = 0)\n• -b Batch Simulation\n• .meas Log Parser"]
-    E --> F{"✅ Physics & Spec\nVerified?"}
-    F -- "No (Diagnostics)" --> B
-    F -- "Yes (< 5% Error)" --> G["📊 Deliverables\n• Wired .asc & .plt\n• .cir Netlist\n• MD/HTML Report & Plots"]
-```
-
----
-
-## 🏆 Comparison Against Existing Ecosystem Tools (2024–2026)
-
-| Tool / Project | Category | First-Principles Hand Calcs & E24 | Inter-Stage Loading Contract | Closed-Loop LTspice `.meas` | Vision-to-SPICE Photo Import | Full `.asc`/`.cir`/`.asy`/`.plt` Editor | Functional Wired 16px `.asc` (`NC_ = 0`) |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **⚡ AI-SPICE (This Repo)** | **End-to-End Engineering Framework** | ✅ **Yes (BJT, LC, Barkhausen, E12/24/96)** | ✅ **Yes (`StageContract`)** | ✅ **Yes** | ✅ **Yes (`ask_user` & `autonomous`)** | ✅ **Yes (All 8 LTspice formats)** | ✅ **Yes (Full Signal Wiring + DRC)** |
-| `PyLTSpice` / `spicelib` | Python Simulation Runner | ❌ No | ❌ No | ✅ Yes | ❌ No | ⚠️ Partial | ❌ No (No auto-layout) |
-| `SKiDL` / `atopile` | Hardware-as-Code DSL (PCB) | ❌ No | ❌ No | ❌ No | ❌ No | ❌ (KiCad PCB focus) | ❌ No |
-| `Cognitohazard/ltspice-mcp` | Basic MCP Wrapper | ❌ No | ❌ No | ✅ Yes | ❌ No | ⚠️ Basic | ❌ No |
-| `AnalogCoder-Pro` *(IEEE '26)* | Academic IC Script Generator | ❌ No (Black-box BO) | ❌ No | ❌ (`PySpice` only) | ❌ No | ❌ No | ❌ No |
-
----
-
-## 🔌 Functional Block & Orthogonal Signal-Wired `.asc` Compiler
-
-Unlike naive scripts that dump components onto a grid with text labels, `compile_netlist_to_asc(..., style="A_textbook_wired")` automatically:
-- **Organizes Functional Stages Left-to-Right**:
-  1. **AC Input & Coupling** (`VIN` $\rightarrow$ series `CIN` $\rightarrow$ `RIN`);
-  2. **Amplifier / Op-Amp Stages** (`XU1`, `XU2` 5-pin subcircuits such as `LT1360`, `opamp2`) with their feedback dividers (`RF1–RG1`, `RF2–RF3–RG2`) and compensation networks (`RCOMP`, `CF2`) stacked directly underneath each Op-Amp;
-  3. **Diode Bias Chains & Complementary Push-Pull Stages** (`RBP–D1–D2–RBN` and `Q1` NPN `R0` $\rightarrow$ `RE1` $\rightarrow$ `OUT` $\rightarrow$ `RE2` $\rightarrow$ `Q2` PNP mirrored `M180` so its Emitter faces up and Collector faces `VEE`);
-  4. **Output Load & Zobel Networks** (`RLOAD` + series-shunt `RZ–CZ`);
-  5. **Dedicated Power Supply & Decoupling Bank** (`VCC`, `VEE`, `CDP`, `CDN`, `CBP`, `CBN`) on the right.
-- **Routes 100% of Signal, Bias & Feedback Nets with Physical Orthogonal Wires (`wire_signal_nets_on_schematic`)**: Keeps only power rails (`VCC`, `VEE`, `VDD`, `VSS`) and Ground (`0`) on local flags.
-
----
-
-## 📊 Verified Circuit Benchmarks (`showcase/`)
-
-All 5 complete benchmark projects are available ready-to-open in [`showcase/`](showcase/):
-
-| # | Benchmark Folder | Circuit Topology | Key Target vs. LTspice `.meas` Result | `.asc` `NC_` Pins | Signal Nets Wired |
-| :---: | :--- | :--- | :--- | :---: | :---: |
-| **01** | [`01_flagship_5mhz_fm_transmitter/`](showcase/01_flagship_5mhz_fm_transmitter/) | 6-Stage 5 MHz Colpitts VCO FM Transmitter ($50\,\Omega$) | $f_0 = 4.9798\text{ MHz}$ ($-0.40\%$), $P_{out} = 9.82\text{ mW}$ ($-1.77\%$) | `0` | **100% Wired** |
-| **02** | [`02_rlc_1mhz_bandpass_filter/`](showcase/02_rlc_1mhz_bandpass_filter/) | 1 MHz E24 Series RLC Bandpass Filter | $f_0 = 1.005\text{ MHz}$ ($+0.50\%$), $BW = 148.6\text{ kHz}$ | `0` | **100% Wired** |
-| **03** | [`03_cascaded_bjt_amp_layout_styles/`](showcase/03_cascaded_bjt_amp_layout_styles/) | 2-Stage CE + Emitter-Follower BJT Amplifier ($100\,\Omega$) | Restores collapsed gain $0.40 \rightarrow 6.87\text{ V/V}$ ($-1.15\%$) | `0` | **100% Wired** |
-| **04** | [`04_vision_to_spice_reconstruction/`](showcase/04_vision_to_spice_reconstruction/) | Vision-to-SPICE BJT Amplifier from Incomplete Photo | $V_E = 1.15\text{ V}$, $A_v = 9.40\text{ V/V}$ ($20\text{ dB}$) | `0` | **100% Wired** |
-| **05** | [`05_class_ab_audio_amplifier/`](showcase/05_class_ab_audio_amplifier/) | 1 W / $8\,\Omega$ Class-AB Audio Amplifier (`LT1360` + `FZT849`/`FZT949`) | $P_{out} = 0.997\text{ W}$ ($-0.30\%$), $BW = 9.4\text{ Hz–}560\text{ kHz}$ | `0` | **100% Wired** |
-
----
-
-## 📸 Vision-to-SPICE: Schematic Photo Reconstruction (`vision_to_spice.py`)
-
-When a user provides a photo, textbook scan, or hand-drawn sketch of a schematic where component values, transistor models, or supply voltages are missing (`?`), `ai_spice.vision_to_spice` operates in two selectable modes (see [`examples/demo3_vision_reconstruction.py`](examples/demo3_vision_reconstruction.py)):
-1. **`mode="ask_user"` (Interactive Missing-Parameter Audit)**: Identifies every missing parameter, calculates an analytical **E24** suggestion with engineering rationale, and outputs a structured table asking the user whether to provide manual values or authorize autonomous sizing.
-2. **`mode="autonomous"` (Autonomous Sizing & Wired `.asc` Compilation)**: Applies analytical operating-point equations (plus any `user_overrides`), compiles both `.cir` and a fully wired 16-pixel grid `.asc` schematic (`NC_ = 0`), and simulates in LTspice.
-
----
-
-## 🛠️ Universal LTspice Project Editor (All Formats)
-
-AI-SPICE can **read, diagnose, modify, add components, and auto-layout** existing LTspice projects across all file extensions:
-- **`.asc` (Visual Schematics)**: Lossless parser (`parse_asc_file`), component value modifier (`modify_asc_component`), non-overlapping component injector (`add_component_to_asc`), orthogonal signal router (`wire_signal_nets_on_schematic`), and legacy layout fixer (`beautify_asc_file`).
-- **`.cir` / `.net` / `.sp` (SPICE Netlists)**: Full parser/editor (`parse_spice_netlist`) + automatic `.cir` $\rightarrow$ `.asc` compiler (`compile_netlist_to_asc`) supporting **3 selectable wired architectures**:
-  - `style="A_textbook_wired"` *(Default)*: Functional stage blocks with full orthogonal signal wiring and local power/GND flags.
-  - `style="B_power_rail_bus"`: Continuous top horizontal `VCC` power bus wire + full orthogonal signal wiring.
-  - `style="C_modular_blocks"`: Ultra-spaced modular sub-circuit cells (`256 px` pitch) + orthogonal signal wiring.
-- **`.sub` / `.lib` (Libraries)**, **`.asy` (Custom Symbols)**, **`.plt` (Waveform Plot Configs)**, and **`.log` (Simulation Logs)**.
-
----
-
-## 📂 Repository Structure
-
-```text
-AI-SPICE/
-├── AGENTS.md                # Auto-loaded instructions for OpenAI Codex / ChatGPT / Jules
-├── CLAUDE.md                # Auto-loaded instructions for Anthropic Claude Code
-├── .cursorrules             # Auto-loaded instructions for Cursor IDE
-├── llms.txt                 # Standard LLM search & RAG index manifest
-├── mcp.json                 # Model Context Protocol (MCP) server manifest (7 tools)
-├── smithery.yaml            # Smithery.ai 1-click MCP installation manifest
-├── CITATION.cff             # Academic citation metadata
-├── CONTRIBUTING.md          # Contribution & benchmark submission guidelines
-├── README.md                # Primary documentation (English)
-├── README.pt-BR.md          # Documentation in Portuguese (Português-BR)
-├── pyproject.toml           # Python package definition (`ai-spice` / `ai-spice-mcp`)
-├── configs/                 # Ready-to-copy MCP JSON configs for Claude Code, Cursor & Antigravity
-├── docs/                    # Architecture, launch & distribution guides
-├── examples/                # Runnable demonstration scripts (demo1..demo4)
-├── showcase/                # 5 Complete, Verified LTspice Benchmark Projects (.asc, .cir, .plt, .md)
-│   ├── 01_flagship_5mhz_fm_transmitter/
-│   ├── 02_rlc_1mhz_bandpass_filter/
-│   ├── 03_cascaded_bjt_amp_layout_styles/
-│   ├── 04_vision_to_spice_reconstruction/
-│   └── 05_class_ab_audio_amplifier/
-├── skills/
-│   └── ai-spice-engineer/   # Agent Skill enforcing the 7-Phase Equation-Grounded Protocol
-├── src/
-│   ├── ai_spice/            # Primary Python package (`import ai_spice`)
-│   └── ia_spice/            # Core implementation & backwards-compatible alias (`import ia_spice`)
-└── tests/                   # 35 automated unit + live LTspice integration & benchmark tests
-```
-
----
-
-## 🚀 Quickstart (60 Seconds)
-
-### 1. Install
-```bash
-git clone https://github.com/Caiobinha1/AI-SPICE.git
-cd AI-SPICE
-pip install -e .[dev]
-```
-
-### 2. Verify LTspice & Run the 35-Test Suite
-```bash
+# 1. Verify local LTspice installation and environment health
 python -m ai_spice.cli doctor
-python -m unittest discover -s tests -v
-```
 
-### 3. CLI Examples
-```bash
-# Snap an analytical value to commercial E24 series
+# 2. Quantize any theoretical value to standard commercial E12 / E24 / E96 series
 python -m ai_spice.cli snap 10.83k --series E24
 
-# Compile any SPICE netlist (.cir) into a functionally grouped, signal-wired .asc schematic
-python -m ai_spice.cli netlist-to-asc showcase/05_class_ab_audio_amplifier/classe_ab.cir out.asc --style A_textbook_wired --verify
+# 3. Compile any SPICE netlist (.cir/.net) into a topologically organized, signal-wired .asc schematic
+python -m ai_spice.cli netlist-to-asc path/to/circuit.cir path/to/circuit.asc --style A_textbook_wired --verify
 
-# Inspect an entire LTspice project directory (.asc, .cir, .lib, .plt, .log)
-python -m ai_spice.cli inspect showcase/05_class_ab_audio_amplifier
+# 4. Repair, space out, and physically wire an existing or legacy .asc schematic
+python -m ai_spice.cli beautify-asc path/to/legacy_schematic.asc
 
-# Auto-fix overlapping .tran/.meas directives and wire disconnected signal flags in a legacy .asc
-python -m ai_spice.cli beautify-asc path/to/circuit.asc
+# 5. Modify component values (with optional E24 snapping) directly inside an .asc or .cir file
+python -m ai_spice.cli modify-asc path/to/circuit.asc R1 15k --series E24
+
+# 6. Run headless LTspice batch simulation and extract all .meas telemetry as JSON
+python -m ai_spice.cli sim path/to/circuit.asc --json
+
+# 7. Inspect an entire project directory (schematics, netlists, symbols, models, plots, logs)
+python -m ai_spice.cli inspect path/to/project_dir
 ```
 
-### 4. Connect as an MCP Server (Claude Code / Cursor / Codex / Antigravity)
-Copy [`configs/mcp_config.example.json`](configs/mcp_config.example.json) into your client's MCP configuration:
+### Connect as an MCP Server (Claude Code / Cursor / Codex / Antigravity)
+Add [`configs/mcp_config.example.json`](configs/mcp_config.example.json) to your MCP client configuration:
 ```json
 {
   "mcpServers": {
@@ -207,5 +194,48 @@ Copy [`configs/mcp_config.example.json`](configs/mcp_config.example.json) into y
 
 ---
 
+## 📂 Repository Structure
+
+```text
+AI-SPICE/
+├── AGENTS.md                # Auto-loaded instructions for OpenAI Codex / ChatGPT / Jules
+├── CLAUDE.md                # Auto-loaded instructions for Anthropic Claude Code
+├── .cursorrules             # Auto-loaded instructions for Cursor IDE
+├── llms.txt                 # Standard LLM discovery & RAG index manifest
+├── mcp.json                 # Model Context Protocol (MCP) server manifest (7 tools)
+├── smithery.yaml            # Smithery.ai MCP installation manifest
+├── CITATION.cff             # Academic & software citation metadata
+├── CONTRIBUTING.md          # Contribution guidelines
+├── README.md                # Primary documentation (English)
+├── README.pt-BR.md          # Documentation in Portuguese (Português-BR)
+├── pyproject.toml           # Python package configuration (`ai-spice` / `ai-spice-mcp`)
+├── configs/                 # Ready-to-use MCP client configurations
+├── docs/                    # Architecture and technical documentation
+├── examples/                # Runnable demonstration workflows
+├── showcase/                # Verified reference LTspice projects (.asc, .cir, .plt, reports)
+├── skills/
+│   └── ai-spice-engineer/   # Agent Skill enforcing the 7-Phase Closed-Loop Engineering Protocol
+├── src/
+│   ├── ai_spice/            # Primary Python package (`import ai_spice`)
+│   └── ia_spice/            # Core implementation & backwards-compatible alias
+└── tests/                   # Automated unit, schematic DRC, and live LTspice integration suite
+```
+
+---
+
+## 🚀 Quickstart
+
+```bash
+git clone https://github.com/Caiobinha1/AI-SPICE.git
+cd AI-SPICE
+pip install -e .[dev]
+python -m ai_spice.cli doctor
+python -m unittest discover -s tests -v
+```
+
+> Explore [`showcase/`](showcase/) and [`examples/`](examples/) for complete, simulation-verified reference projects across RF, analog amplification, active/passive filtering, and multi-modal reconstruction.
+
+---
+
 ## 📄 License & Citation
-Released under the [MIT License](LICENSE). See [`CITATION.cff`](CITATION.cff) for academic citation details.
+Released under the [MIT License](LICENSE). See [`CITATION.cff`](CITATION.cff) for citation metadata.
