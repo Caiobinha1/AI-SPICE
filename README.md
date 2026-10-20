@@ -10,7 +10,6 @@
 [![MCP Server: JSON-RPC 2.0](https://img.shields.io/badge/MCP-JSON--RPC%202.0-16a34a.svg)](src/ai_spice/mcp_server.py)
 [![Tests: Passing](https://img.shields.io/badge/Verification-Closed--Loop%20SPICE-10b981.svg)](tests/)
 [![LLMs.txt](https://img.shields.io/badge/AI%20Discovery-llms.txt-8b5cf6.svg)](llms.txt)
-[![Leia em Português](https://img.shields.io/badge/Idioma-Portugu%C3%AAs%20(BR)-f59e0b.svg)](README.pt-BR.md)
 
 [**🏛️ System Architecture**](#️-system-architecture) · [**🌐 Supported Domains**](#-supported-engineering-domains--analyses) · [**🤖 For AI Agents & MCP**](#-for-ai-agents--llm-discovery) · [**🔌 Topological `.asc` Compiler**](#-topological-stage-flow--orthogonal-signal-wired-asc-compiler) · [**📸 Vision-to-SPICE**](#-vision-to-spice-multi-modal-schematic-reconstruction) · [**🚀 Quickstart**](#-quickstart)
 
@@ -207,7 +206,6 @@ AI-SPICE/
 ├── CITATION.cff             # Academic & software citation metadata
 ├── CONTRIBUTING.md          # Contribution guidelines
 ├── README.md                # Primary documentation (English)
-├── README.pt-BR.md          # Documentation in Portuguese (Português-BR)
 ├── pyproject.toml           # Python package configuration (`ai-spice` / `ai-spice-mcp`)
 ├── configs/                 # Ready-to-use MCP client configurations
 ├── docs/                    # Architecture and technical documentation
