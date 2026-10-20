@@ -10,4 +10,3 @@ Designed and verified end-to-end using AI-SPICE:
   - $-3\text{ dB}$ Bandwidth: **$9.43\text{ Hz}$ to $560.5\text{ kHz}$** ($< 0.08\text{ dB}$ flatness across $20\text{ Hz–}20\text{ kHz}$)
   - Schematic DRC: **`NC_ = 0`** floating pins, 100% physical orthogonal `WIRE` connections on all signal/feedback paths.
 
-![Class-AB Wired Schematic](../../assets/class_ab_wired_schematic.png)

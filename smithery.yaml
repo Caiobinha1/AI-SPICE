@@ -1,0 +1,15 @@
+# Smithery.ai MCP Server Configuration for AI-SPICE
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties:
+      ltspiceExecutable:
+        type: string
+        description: Optional custom path to LTspice.exe (auto-detected on Windows/Linux/macOS by default)
+  commandFunction: |-
+    (config) => ({
+      command: 'python',
+      args: ['-m', 'ai_spice.mcp_server'],
+      env: config.ltspiceExecutable ? { LTSPICE_EXECUTABLE: config.ltspiceExecutable } : {}
+    })

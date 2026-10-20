@@ -9,9 +9,10 @@
 [![Simulator: LTspice 24](https://img.shields.io/badge/Simulator-LTspice%2024%20%2F%20XVII-dc2626.svg)](#)
 [![MCP Server: 7 Tools](https://img.shields.io/badge/MCP-JSON--RPC%202.0-16a34a.svg)](src/ai_spice/mcp_server.py)
 [![Tests: 35 Passed](https://img.shields.io/badge/Tests-35%2F35%20Passing-10b981.svg)](tests/)
+[![LLMs.txt](https://img.shields.io/badge/AI%20Discovery-llms.txt-8b5cf6.svg)](llms.txt)
 [![Leia em Português](https://img.shields.io/badge/Idioma-Portugu%C3%AAs%20(BR)-f59e0b.svg)](README.pt-BR.md)
 
-[**🚀 Quickstart**](#-quickstart-60-seconds) · [**🏛️ Architecture**](#️-closed-loop-architecture) · [**🔌 Wired `.asc` Compiler**](#-functional-block--orthogonal-signal-wired-asc-compiler) · [**📊 Verified Benchmarks**](#-verified-circuit-benchmarks-showcase) · [**📸 Vision-to-SPICE**](#-vision-to-spice-schematic-photo-reconstruction) · [**🛠️ Universal Project Editor**](#️-universal-ltspice-project-editor-all-formats)
+[**🚀 Quickstart**](#-quickstart-60-seconds) · [**🤖 For AI Agents**](#-for-ai-agents--llm-discovery-codex--claude-code--cursor--gemini) · [**🏛️ Architecture**](#️-closed-loop-architecture) · [**🔌 Wired `.asc` Compiler**](#-functional-block--orthogonal-signal-wired-asc-compiler) · [**📊 Verified Benchmarks**](#-verified-circuit-benchmarks-showcase) · [**📸 Vision-to-SPICE**](#-vision-to-spice-schematic-photo-reconstruction)
 
 </div>
 
@@ -19,14 +20,37 @@
 
 ## 💡 Why Does AI-SPICE Exist? (And Why Standard AI Circuit Attempts Fail)
 
-When engineers or students ask a standard LLM (*ChatGPT, Claude, Gemini, Codex*) to *"Design an FM transmitter or a Class-AB audio amplifier in LTspice"*, the output almost always fails in simulation:
+When engineers or students ask a standard LLM (*ChatGPT, Claude, Gemini, Codex*) to *"Design an FM transmitter, filter, or Class-AB audio amplifier in LTspice"*, the output almost always fails in simulation:
 1. **Zero Analytical Grounding**: The LLM guesses resistor and capacitor values directly inside a monolithic netlist without solving DC operating points ($V_{CE}, I_C, g_m$), tank resonance, or commercial **E12/E24/E96** tolerances.
 2. **Inter-Stage Loading Collapse**: Connecting Stage $N+1$ (e.g., an RF preamplifier or a $50\,\Omega / 8\,\Omega$ load) directly to Stage $N$ collapses loop/voltage gain by $>90\%$ and kills oscillation ($g_m R_p < 1$).
 3. **Broken or Disconnected `.asc` Schematics**: Asking an LLM to generate LTspice `.asc` files directly produces either off-grid floating pins (`NC_01`), overlapping text, or unreadable grids of isolated components connected only by `FLAG` text labels.
 
 **AI-SPICE solves all three problems** by combining first-principles analytical equations, stage-by-stage impedance contracts (`StageContract`), headless `LTspice.exe` verification, physics-based failure diagnostics, and a **16-pixel grid `.asc` compiler that groups circuits into left-to-right functional blocks and connects 100% of signal, bias, and feedback paths with physical orthogonal `WIRE` segments (`NC_ = 0`)**, leaving only power rails (`VCC`, `VEE`) and Ground (`0`) on local flags.
 
-![AI-SPICE Compiled Class-AB Schematic](assets/class_ab_wired_schematic.png)
+---
+
+## 🤖 For AI Agents & LLM Discovery (Codex / Claude Code / Cursor / Gemini)
+
+> **Are you an AI coding agent searching for a tool to create, simulate, debug, or convert LTspice schematics (`.asc`) and SPICE netlists (`.cir`)?**
+> This repository includes native self-configuration files for every major AI agent:
+> - **OpenAI Codex / Jules / ChatGPT**: [`AGENTS.md`](AGENTS.md)
+> - **Claude Code (`claude`)**: [`CLAUDE.md`](CLAUDE.md)
+> - **Cursor IDE**: [`.cursorrules`](.cursorrules)
+> - **GitHub Copilot**: [`.github/copilot-instructions.md`](.github/copilot-instructions.md)
+> - **LLM Search / RAG Index**: [`llms.txt`](llms.txt)
+> - **MCP Registry Manifest**: [`mcp.json`](mcp.json) & [`smithery.yaml`](smithery.yaml)
+
+### One-Command Bootstrap for Autonomous AI Agents
+```bash
+git clone https://github.com/Caiobinha1/AI-SPICE.git
+cd AI-SPICE && pip install -e .
+python -m ai_spice.cli doctor
+```
+
+Once installed, any AI agent can convert a SPICE netlist (`.cir`) into a verified, functionally grouped, physically wired LTspice `.asc` schematic in one command:
+```bash
+python -m ai_spice.cli netlist-to-asc circuit.cir circuit.asc --style A_textbook_wired --verify
+```
 
 ---
 
@@ -82,10 +106,6 @@ All 5 complete benchmark projects are available ready-to-open in [`showcase/`](s
 | **04** | [`04_vision_to_spice_reconstruction/`](showcase/04_vision_to_spice_reconstruction/) | Vision-to-SPICE BJT Amplifier from Incomplete Photo | $V_E = 1.15\text{ V}$, $A_v = 9.40\text{ V/V}$ ($20\text{ dB}$) | `0` | **100% Wired** |
 | **05** | [`05_class_ab_audio_amplifier/`](showcase/05_class_ab_audio_amplifier/) | 1 W / $8\,\Omega$ Class-AB Audio Amplifier (`LT1360` + `FZT849`/`FZT949`) | $P_{out} = 0.997\text{ W}$ ($-0.30\%$), $BW = 9.4\text{ Hz–}560\text{ kHz}$ | `0` | **100% Wired** |
 
-![AI-SPICE Flagship Benchmark: Analytical vs LTspice 24](assets/flagship_vco_theory_vs_ltspice.png)
-
-![Inter-Stage Loading Proof](assets/cascade_loading_proof.png)
-
 ---
 
 ## 📸 Vision-to-SPICE: Schematic Photo Reconstruction (`vision_to_spice.py`)
@@ -112,17 +132,20 @@ AI-SPICE can **read, diagnose, modify, add components, and auto-layout** existin
 
 ```text
 AI-SPICE/
-├── AGENTS.md                # Mandatory instructions for OpenAI Codex, Claude Code & Cursor agents
+├── AGENTS.md                # Auto-loaded instructions for OpenAI Codex / ChatGPT / Jules
+├── CLAUDE.md                # Auto-loaded instructions for Anthropic Claude Code
+├── .cursorrules             # Auto-loaded instructions for Cursor IDE
+├── llms.txt                 # Standard LLM search & RAG index manifest
+├── mcp.json                 # Model Context Protocol (MCP) server manifest (7 tools)
+├── smithery.yaml            # Smithery.ai 1-click MCP installation manifest
 ├── CITATION.cff             # Academic citation metadata
 ├── CONTRIBUTING.md          # Contribution & benchmark submission guidelines
 ├── README.md                # Primary documentation (English)
 ├── README.pt-BR.md          # Documentation in Portuguese (Português-BR)
 ├── pyproject.toml           # Python package definition (`ai-spice` / `ai-spice-mcp`)
-├── assets/                  # High-resolution schematic previews & LTspice vs. theory plots
 ├── configs/                 # Ready-to-copy MCP JSON configs for Claude Code, Cursor & Antigravity
 ├── docs/                    # Architecture, launch & distribution guides
 ├── examples/                # Runnable demonstration scripts (demo1..demo4)
-├── scripts/                 # Asset & showcase generation utilities
 ├── showcase/                # 5 Complete, Verified LTspice Benchmark Projects (.asc, .cir, .plt, .md)
 │   ├── 01_flagship_5mhz_fm_transmitter/
 │   ├── 02_rlc_1mhz_bandpass_filter/

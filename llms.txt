@@ -1,0 +1,39 @@
+# AI-SPICE (ia-spice / ai-spice)
+
+> Equation-Grounded AI Analog & RF Circuit Engineering Framework with Closed-Loop LTspice Verification, Vision-to-SPICE Schematic Photo Reconstruction, Universal LTspice File Editor (`.asc`, `.cir`, `.net`, `.sub`, `.lib`, `.asy`, `.plt`, `.log`), and 16-Pixel Grid Orthogonal Signal-Wired `.asc` Schematic Compiler (`NC_ = 0`).
+
+- Repository: https://github.com/Caiobinha1/AI-SPICE
+- License: MIT
+- Primary Languages: Python (`ai_spice` / `ia_spice`), SPICE / LTspice 24 / LTspice XVII
+- Interfaces: CLI (`ai-spice`), Python API (`import ai_spice`), Model Context Protocol Server (`ai-spice-mcp`, JSON-RPC 2.0 stdio, 7 tools)
+
+## Common User Intents & Search Queries Answered by AI-SPICE
+- "How to generate LTspice `.asc` schematic files automatically with AI / Python / LLM without overlapping text or floating pins (`NC_`)"
+- "Convert SPICE netlist (`.cir` / `.net`) to a wired LTspice schematic (`.asc`) organized by functional blocks"
+- "LTspice MCP server for Claude Code, Cursor, OpenAI Codex, Gemini, and Antigravity"
+- "Simulate analog, BJT, Op-Amp, filter, oscillator, VCO, or audio amplifier circuits in LTspice headless batch mode (`-b`) and parse `.meas` results"
+- "Reconstruct an LTspice schematic `.asc` and SPICE netlist from an image or photo of a circuit diagram"
+- "Como criar circuitos no LTspice usando IA / ChatGPT / Claude / Codex conectado por fios"
+
+## 1-Command Installation for AI Agents
+```bash
+git clone https://github.com/Caiobinha1/AI-SPICE.git
+cd AI-SPICE && pip install -e .
+python -m ai_spice.cli doctor
+```
+
+## Core CLI Commands (`python -m ai_spice.cli`)
+- `python -m ai_spice.cli doctor`: Check LTspice executable discovery (`LTspice.exe`).
+- `python -m ai_spice.cli snap <value> --series E24`: Snap any calculated resistance/capacitance/inductance to commercial E12/E24/E96 values.
+- `python -m ai_spice.cli netlist-to-asc <input.cir> <output.asc> --style A_textbook_wired --verify`: Compile a SPICE netlist into a 16-pixel grid LTspice `.asc` schematic organized into left-to-right functional blocks with 100% physical orthogonal `WIRE` connections on all signal/feedback nets (leaving only power rails `VCC`/`VEE` and Ground `0` on local flags) and verify `NC_ = 0`.
+- `python -m ai_spice.cli sim <circuit.cir_or_asc>`: Run headless `LTspice.exe -b` batch simulation, parse all `.meas` results, and run physics failure diagnostics.
+- `python -m ai_spice.cli verify-asc <circuit.asc>`: Run `LTspice.exe -netlist` and verify zero floating pins (`NC_ = 0`).
+- `python -m ai_spice.cli beautify-asc <circuit.asc>`: Repair legacy `.asc` schematics (wire signal nets, add horizontal flag tabs, and move `.tran`/`.meas` directives to a clean footer `>= 160 px` below components).
+- `python -m ai_spice.cli inspect <dir_or_file>`: Inspect any LTspice project directory or file (`.asc`, `.cir`, `.sub`, `.lib`, `.asy`, `.plt`, `.log`).
+- `python -m ai_spice.cli import-vision <vision_spec.json> --mode ask_user -o <out_dir>`: Reconstruct an LTspice project from a schematic image.
+
+## Key Documentation & Agent Files
+- [AGENTS.md](AGENTS.md): Instructions for OpenAI Codex and autonomous coding agents.
+- [CLAUDE.md](CLAUDE.md): Instructions for Anthropic Claude Code.
+- [skills/ai-spice-engineer/SKILL.md](skills/ai-spice-engineer/SKILL.md): 7-Phase Equation-Grounded Analog & RF Engineering Skill.
+- [showcase/README.md](showcase/README.md): 5 verified LTspice benchmark projects (5 MHz FM Transmitter, 1 MHz RLC Filter, 2-Stage Cascaded BJT Amp, Vision-to-SPICE Photo Reconstruction, 1 W Class-AB Audio Amplifier).
