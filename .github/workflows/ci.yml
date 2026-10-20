@@ -1,0 +1,37 @@
+name: AI-SPICE CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-analytical-and-compiler:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install AI-SPICE package and dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,pdf]"
+
+      - name: Run Analytical Sizing, Parser, Schematic AST & Reporting Tests
+        run: |
+          pytest tests/test_step1_sizing.py tests/test_step4_reporting.py
+
+      - name: Verify CLI & MCP Server JSON-RPC Discovery
+        run: |
+          python -m ai_spice.cli snap 10.83k --series E24
+          python -c "from ai_spice.mcp_server import handle_jsonrpc_Message; r = handle_jsonrpc_Message({'jsonrpc':'2.0','id':1,'method':'tools/list'}); assert len(r['result']['tools']) == 8"

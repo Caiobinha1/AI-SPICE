@@ -174,6 +174,43 @@ class TestStep1Sizing(unittest.TestCase):
         self.assertTrue(isolated_report.passed)
         self.assertLess(isolated_report.current_utilization_pct, 3.0)
 
+    def test_multi_domain_sizing(self):
+        from ia_spice.sizing import (
+            size_l_matching_network,
+            size_mosfet_stage,
+            size_opamp_stage,
+            size_passive_filter,
+            size_sallen_key_filter,
+            size_voltage_divider,
+        )
+
+        # 1. Voltage divider
+        vdiv = size_voltage_divider(v_in=12.0, v_out_target=3.3, r_total_target=20e3, series="E24")
+        self.assertLess(abs(vdiv.error_pct), 1.5)
+
+        # 2. Op-Amp stage (Non-inverting 10x and Inverting -4.7x)
+        op_ni = size_opamp_stage(target_gain_vv=10.0, topology="non_inverting", r_input_target=1000.0)
+        self.assertAlmostEqual(op_ni.actual_gain_vv, 10.1, delta=0.2)
+        op_inv = size_opamp_stage(target_gain_vv=-4.7, topology="inverting", r_input_target=10e3)
+        self.assertAlmostEqual(op_inv.actual_gain_vv, -4.7, places=2)
+
+        # 3. MOSFET Common-Source stage
+        mos = size_mosfet_stage(v_dd=12.0, r_g1=82e3, r_g2=39e3, r_d=2.2e3, r_s=1.0e3, k_p=4e-3, v_th=1.5)
+        self.assertEqual(mos.region, "SATURATION")
+        self.assertGreater(mos.g_m, 1e-3)
+
+        # 4. Passive & Active Sallen-Key Filters
+        f_rc = size_passive_filter(f_cutoff_hz=15.9e3, filter_type="rc_lowpass", r_characteristic=1000.0)
+        self.assertLess(abs(f_rc.freq_error_pct), 2.0)
+        f_sk = size_sallen_key_filter(f_cutoff_hz=10e3, q_factor=0.7071, c_base=10e-9)
+        self.assertLess(abs(f_sk.freq_error_pct), 3.0)
+
+        # 5. RF L-Section Matching Network (50 Ohm to 500 Ohm at 10 MHz)
+        lmatch = size_l_matching_network(r_source=50.0, r_load=500.0, f_0_hz=10e6)
+        self.assertAlmostEqual(lmatch.q_network, 3.0, places=2)
+        self.assertGreater(lmatch.l_henries, 0.0)
+        self.assertGreater(lmatch.c_farads, 0.0)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

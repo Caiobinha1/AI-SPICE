@@ -78,7 +78,7 @@ class TestStep5CLIAndMCP(unittest.TestCase):
 
         list_resp = handle_jsonrpc_Message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
         tools = list_resp["result"]["tools"]
-        self.assertEqual(len(tools), 7)
+        self.assertEqual(len(tools), 8)
 
         # Call ia_spice_size_colpitts via MCP JSON-RPC
         call_resp = handle_jsonrpc_Message({
@@ -102,6 +102,23 @@ class TestStep5CLIAndMCP(unittest.TestCase):
         payload = json.loads(call_resp["result"]["content"][0]["text"])
         self.assertTrue(payload["barkhausen"]["will_start"])
         self.assertAlmostEqual(payload["tank"]["f_lc_hz"] * 1e-6, 5.054, places=2)
+
+        # Call ia_spice_size_circuit_block for Op-Amp, Sallen-Key, MOSFET, L-Match, Voltage Divider
+        op_resp = handle_jsonrpc_Message({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {
+                "name": "ai_spice_size_circuit_block",
+                "arguments": {
+                    "block_type": "opamp",
+                    "params": {"target_gain_vv": 10.0, "topology": "non_inverting", "r_input_target": 1000.0},
+                },
+            },
+        })
+        self.assertFalse(op_resp["result"]["isError"])
+        op_data = json.loads(op_resp["result"]["content"][0]["text"])
+        self.assertAlmostEqual(op_data["actual_gain_vv"], 10.1, delta=0.2)
 
 
 if __name__ == "__main__":

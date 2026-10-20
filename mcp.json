@@ -1,9 +1,9 @@
 {
   "$schema": "https://modelcontextprotocol.io/schema/mcp.json",
   "name": "ai-spice",
-  "displayName": "AI-SPICE — LTspice & Analog/RF Circuit Engineering MCP Server",
+  "displayName": "AI-SPICE — LTspice & Electronic Circuit Engineering MCP Server",
   "version": "0.1.0",
-  "description": "Closed-loop LTspice simulation, E12/E24/E96 analytical circuit sizing, Vision-to-SPICE schematic photo reconstruction, and 16px-grid orthogonal signal-wired .asc schematic compiler (NC_ = 0).",
+  "description": "Closed-loop LTspice batch simulation, multi-domain E12/E24/E96 analytical circuit sizing (Op-Amps, BJTs, MOSFETs, Active/Passive Filters, RF Oscillators & Matching, Power), Vision-to-SPICE schematic photo reconstruction, and 16px-grid orthogonal signal-wired .asc schematic compiler (NC_ = 0).",
   "repository": {
     "type": "git",
     "url": "https://github.com/Caiobinha1/AI-SPICE.git"
@@ -26,11 +26,11 @@
   "args": ["-m", "ai_spice.mcp_server"],
   "tools": [
     {
-      "name": "ia_spice_snap_component",
+      "name": "ia_spice_snap_series",
       "description": "Snap a theoretical R/L/C value to the nearest commercial E12, E24, or E96 standard series value."
     },
     {
-      "name": "ia_spice_size_bjt",
+      "name": "ia_spice_size_bjt_stage",
       "description": "Analytically size a BJT DC operating point (R1, R2, RC, RE) in E24 values with thermal stability and small-signal gm, r_pi, Z_in, Z_out."
     },
     {
@@ -38,11 +38,15 @@
       "description": "Size a Colpitts LC oscillator capacitive feedback network (C1, C2) and evaluate Barkhausen startup margin (gm * Rp)."
     },
     {
-      "name": "ia_spice_run_ltspice",
+      "name": "ia_spice_size_circuit_block",
+      "description": "General-purpose analytical sizing for Op-Amp stages, MOSFET stages, Passive RC/RLC filters, Active Sallen-Key filters, RF L-section matching networks, and precision voltage/feedback dividers."
+    },
+    {
+      "name": "ia_spice_run_simulation",
       "description": "Run headless LTspice (-b) on a .cir or .asc file, parse all .meas results, and execute physics-based failure diagnostics."
     },
     {
-      "name": "ia_spice_verify_asc",
+      "name": "ia_spice_verify_schematic_asc",
       "description": "Formally verify an LTspice .asc schematic via LTspice -netlist, checking for zero floating pins (NC_ = 0) and netlist isomorphism."
     },
     {
@@ -50,7 +54,7 @@
       "description": "Reconstruct a complete LTspice .cir netlist and wired .asc schematic from a schematic photo/image (supports ask_user and autonomous modes)."
     },
     {
-      "name": "ia_spice_project_tool",
+      "name": "ia_spice_edit_ltspice_project",
       "description": "Inspect, beautify, modify components, add components, or compile a .cir netlist into a functionally grouped, signal-wired .asc schematic."
     }
   ]

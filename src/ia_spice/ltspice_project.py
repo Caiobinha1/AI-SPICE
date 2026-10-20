@@ -386,8 +386,20 @@ class SpiceNetlistComponent:
             vu = self.value.upper()
             pnp_prefixes = ("PNP", "2N3906", "2N2907", "BC55", "FZT9", "TIP30", "TIP32", "TIP42", "BD136", "BD138", "BD140", "MJE2955", "2SA", "2SB")
             return "pnp" if any(vu.startswith(px) or px in vu for px in pnp_prefixes) else "npn"
+        if p == "M":
+            vu = self.value.upper()
+            pmos_prefixes = ("PMOS", "BS250", "IRF9", "FQP27P", "AO3401", "SI2301", "2SJ", "VP")
+            return "pmos" if any(vu.startswith(px) or px in vu for px in pmos_prefixes) else "nmos"
+        if p == "J":
+            vu = self.value.upper()
+            pjf_prefixes = ("PJF", "J17", "2N546")
+            return "pjf" if any(vu.startswith(px) or px in vu for px in pjf_prefixes) else "njf"
         if p == "X" and len(self.nodes) == 5:
-            return f"Opamps\\{self.value}"
+            local_app = os.environ.get("LOCALAPPDATA", os.path.expanduser(r"~\AppData\Local"))
+            op_asy = os.path.join(local_app, "LTspice", "lib", "sym", "Opamps", f"{self.value}.asy")
+            if os.path.isfile(op_asy) or self.value.lower() in ("lt1360", "universalopamp2", "opamp2"):
+                return f"Opamps\\{self.value}"
+            return "Opamps\\opamp2"
         if p == "X" and len(self.nodes) == 2:
             return "diode"
         return "cell"
@@ -1321,18 +1333,18 @@ def _group_into_functional_columns(comps: List[SpiceNetlistComponent]) -> List[L
                 if c.inst_name in used:
                     continue
 
-        # Standard BJT stack (`[optional RC, Q, optional RE1, optional RE2]`)
-        if c.prefix == "Q" or (
+        # Standard BJT / MOSFET / JFET stack (`[optional RC/RD, Q/M/J, optional RE1/RS1, optional RE2/RS2]`)
+        if c.prefix in ("Q", "M", "J") or (
             c.prefix == "R" and any(
-                q.inst_name not in used and q.prefix == "Q"
+                q.inst_name not in used and q.prefix in ("Q", "M", "J")
                 and not _is_power_node(q.nodes[0]) and q.nodes[0] != "0"
                 and q.nodes[0] in c.nodes and any(_is_power_node(n) for n in c.nodes)
                 for q in comps
             )
         ):
-            q_comp = c if c.prefix == "Q" else next(
+            q_comp = c if c.prefix in ("Q", "M", "J") else next(
                 q for q in comps
-                if q.inst_name not in used and q.prefix == "Q"
+                if q.inst_name not in used and q.prefix in ("Q", "M", "J")
                 and not _is_power_node(q.nodes[0]) and q.nodes[0] != "0"
                 and q.nodes[0] in c.nodes
             )
@@ -1520,17 +1532,20 @@ def _layout_style_a_textbook_wired(
             op_c = col[0]
             op_name = op_c.inst_name[1:] if op_c.inst_name.upper().startswith("XU") else op_c.inst_name
             sch.add_directive(f"=== ESTAGIO AMP-OP ({op_name}) ===", x=col_x, y=48, is_comment=True)
+            is_opamp2 = op_c.symbol_type.lower().endswith("opamp2") and not op_c.symbol_type.lower().endswith("universalopamp2")
+            op_y = 128 if is_opamp2 else 192
             op_p = sch.add_component(
                 op_name,
                 op_c.symbol_type,
                 x=col_x + 144,
-                y=192,
+                y=op_y,
                 value=op_c.value,
                 prefix="X",
                 allow_custom_symbol=True,
             )
-            op_p.extra_attrs["SpiceModel"] = f"{op_c.value}.lib"
-            op_p.extra_attrs["Value2"] = op_c.value
+            if not is_opamp2 and op_c.value.lower() != "universalopamp2":
+                op_p.extra_attrs["SpiceModel"] = f"{op_c.value}.lib"
+                op_p.extra_attrs["Value2"] = op_c.value
 
             in_p, in_m, v_pos, v_neg, out_n = op_c.nodes
             sch.add_flag(op_p.pin("1"), in_p, stub_dx=-48, stub_dy=0)
@@ -1741,18 +1756,19 @@ def _layout_style_a_textbook_wired(
             _mark_visited(col)
             continue
 
-        # Case 8: Single BJT vertical stack `[optional RC, Q, optional RE1, optional RE2]`
-        if any(c.prefix == "Q" for c in col):
-            q_c = next(c for c in col if c.prefix == "Q")
+        # Case 8: Single BJT / MOSFET / JFET vertical stack `[optional RC/RD, Q/M/J, optional RE1/RS1, optional RE2/RS2]`
+        if any(c.prefix in ("Q", "M", "J") for c in col):
+            q_c = next(c for c in col if c.prefix in ("Q", "M", "J"))
+            rx_off = 48 if q_c.prefix == "Q" else 32
             q_placed = sch.add_component(q_c.inst_name, q_c.symbol_type, x=col_x, y=240, value=q_c.value)
             c_node, b_node, e_node = q_c.nodes[0], q_c.nodes[1], q_c.nodes[2]
             sch.add_flag(q_placed.pin("B"), b_node, stub_dx=-32, stub_dy=0)
-            net_y_hint[b_node] = 288
+            net_y_hint[b_node] = q_placed.pin("B")[1]
 
             rc_items = [c for c in col if c.prefix == "R" and c_node in c.nodes and c.inst_name != q_c.inst_name]
             if rc_items and col.index(rc_items[0]) < col.index(q_c):
                 rc_c = rc_items[0]
-                rc_p = sch.add_component(rc_c.inst_name, "res", x=col_x + 48, y=80, value=rc_c.value, spice_line=rc_c.spice_line)
+                rc_p = sch.add_component(rc_c.inst_name, "res", x=col_x + rx_off, y=80, value=rc_c.value, spice_line=rc_c.spice_line)
                 top_net = rc_c.nodes[0] if rc_c.nodes[1] == c_node else rc_c.nodes[1]
                 sch.power_pin(rc_p.pin("top"), top_net, stub_dy=-32, stub_dx=32)
                 sch.connect_points(rc_p.pin("bot"), q_placed.pin("C"))
@@ -1764,7 +1780,7 @@ def _layout_style_a_textbook_wired(
             re_items = [c for c in col if c.prefix == "R" and col.index(c) > col.index(q_c)]
             if len(re_items) == 1:
                 re1_c = re_items[0]
-                re1_p = sch.add_component(re1_c.inst_name, "res", x=col_x + 48, y=400, value=re1_c.value, spice_line=re1_c.spice_line)
+                re1_p = sch.add_component(re1_c.inst_name, "res", x=col_x + rx_off, y=400, value=re1_c.value, spice_line=re1_c.spice_line)
                 sch.connect_points(q_placed.pin("E"), re1_p.pin("top"))
                 sch.add_flag((q_placed.pin("E")[0], 368), e_node, stub_dx=48, stub_dy=0)
                 net_y_hint[e_node] = 368
@@ -1772,8 +1788,8 @@ def _layout_style_a_textbook_wired(
                 sch.ground_pin(re1_p.pin("bot"), stub_dy=32) if bot_net == "0" else sch.add_flag(re1_p.pin("bot"), bot_net, stub_dy=32, stub_dx=32)
             elif len(re_items) >= 2:
                 re1_c, re2_c = re_items[0], re_items[1]
-                re1_p = sch.add_component(re1_c.inst_name, "res", x=col_x + 48, y=384, value=re1_c.value, spice_line=re1_c.spice_line)
-                re2_p = sch.add_component(re2_c.inst_name, "res", x=col_x + 48, y=560, value=re2_c.value, spice_line=re2_c.spice_line)
+                re1_p = sch.add_component(re1_c.inst_name, "res", x=col_x + rx_off, y=384, value=re1_c.value, spice_line=re1_c.spice_line)
+                re2_p = sch.add_component(re2_c.inst_name, "res", x=col_x + rx_off, y=560, value=re2_c.value, spice_line=re2_c.spice_line)
                 sch.connect_points(q_placed.pin("E"), re1_p.pin("top"))
                 sch.add_flag((q_placed.pin("E")[0], 368), e_node, stub_dx=48, stub_dy=0)
                 net_y_hint[e_node] = 368

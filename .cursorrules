@@ -1,0 +1,9 @@
+# Cursor AI Rules for AI-SPICE (.cursorrules)
+
+You are working in the AI-SPICE repository (`ai_spice`), an equation-grounded AI circuit engineering and LTspice automation framework.
+
+1. Never guess raw LTspice `.asc` coordinates by hand or connect signal paths solely via disconnected `FLAG` labels.
+2. Always size circuit stages analytically first using `ai_spice.sizing` (`size_opamp_stage`, `size_bjt_OperatingPoint`, `size_mosfet_stage`, `size_passive_filter`, `size_sallen_key_filter`, `size_colpitts_tank`, `evaluate_barkhausen_colpitts`, `size_l_matching_network`, `size_voltage_divider`, `snap_to_series` for E12/E24/E96).
+3. Always compile `.cir` netlists to `.asc` schematics via `ai_spice.ltspice_project.compile_netlist_to_asc(cir_path, asc_path, style="A_textbook_wired")` (or CLI `python -m ai_spice.cli netlist-to-asc <in.cir> <out.asc> --style A_textbook_wired --verify`), which routes 100% of signal nets with orthogonal Manhattan `WIRE` segments on the 16-pixel grid and keeps only power rails (`VCC`, `VEE`, `VDD`, `VSS`) and Ground (`0`) on local flags.
+4. Always verify every generated or modified `.asc` file with `verify_asc_netlist` (`python -m ai_spice.cli verify-asc <file.asc>`) to guarantee `NC_ = 0` floating pins and zero geometric DRC collisions.
+5. Simulate circuits in headless batch mode via `run_ltspice_batch` (`python -m ai_spice.cli sim <file.cir_or_asc>`) with `.options plotwinsize=0` and deterministic `.meas` statements.

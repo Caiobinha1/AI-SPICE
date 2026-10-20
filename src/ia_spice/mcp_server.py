@@ -31,6 +31,12 @@ from .sizing import (
     parse_spice_value,
     size_bjt_OperatingPoint,
     size_colpitts_tank,
+    size_l_matching_network,
+    size_mosfet_stage,
+    size_opamp_stage,
+    size_passive_filter,
+    size_sallen_key_filter,
+    size_voltage_divider,
     snap_to_series,
 )
 
@@ -82,6 +88,21 @@ MCP_TOOLS: List[Dict[str, Any]] = [
                 "c_cv": {"type": "number", "default": 0.0, "description": "Varactor coupling capacitance in Farads"},
             },
             "required": ["l1", "r_ser_inductor", "c1", "c2", "g_m"],
+        },
+    },
+    {
+        "name": "ia_spice_size_circuit_block",
+        "description": "General-purpose analytical sizing for Op-Amp stages, MOSFET stages, Passive RC/RLC filters, Active Sallen-Key filters, RF L-section impedance matching networks, and precision voltage/feedback dividers.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "block_type": {
+                    "type": "string",
+                    "enum": ["opamp", "mosfet", "passive_filter", "sallen_key", "l_match", "voltage_divider"],
+                },
+                "params": {"type": "object", "description": "Domain-specific parameters for the selected block_type"},
+            },
+            "required": ["block_type", "params"],
         },
     },
     {
@@ -154,8 +175,37 @@ MCP_TOOLS: List[Dict[str, Any]] = [
 ]
 
 
+_TOOL_ALIASES: Dict[str, str] = {
+    "ia_spice_snap_component": "ia_spice_snap_series",
+    "ia_spice_size_bjt": "ia_spice_size_bjt_stage",
+    "ia_spice_run_ltspice": "ia_spice_run_simulation",
+    "ia_spice_verify_asc": "ia_spice_verify_schematic_asc",
+    "ia_spice_project_tool": "ia_spice_edit_ltspice_project",
+}
+
+
 def dispatch_tool_call(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     """Execute an MCP tool call and return a JSON-serializable dictionary."""
+    norm_name = name.replace("ai_spice_", "ia_spice_")
+    name = _TOOL_ALIASES.get(norm_name, norm_name)
+
+    if name == "ia_spice_size_circuit_block":
+        btype = str(args["block_type"]).lower()
+        p = dict(args.get("params") or {})
+        if btype == "opamp":
+            return dataclasses.asdict(size_opamp_stage(**p))
+        if btype == "mosfet":
+            return dataclasses.asdict(size_mosfet_stage(**p))
+        if btype == "passive_filter":
+            return dataclasses.asdict(size_passive_filter(**p))
+        if btype == "sallen_key":
+            return dataclasses.asdict(size_sallen_key_filter(**p))
+        if btype == "l_match":
+            return dataclasses.asdict(size_l_matching_network(**p))
+        if btype == "voltage_divider":
+            return dataclasses.asdict(size_voltage_divider(**p))
+        raise ValueError(f"Unsupported block_type: {btype}")
+
     if name == "ia_spice_edit_ltspice_project":
         from .ltspice_project import (
             add_component_to_asc,

@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "ai-spice": {
+      "command": "python",
+      "args": [
+        "-m",
+        "ai_spice.mcp_server"
+      ],
+      "env": {
+        "PYTHONIOENCODING": "utf-8"
+      }
+    }
+  }
+}

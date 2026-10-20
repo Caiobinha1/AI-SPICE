@@ -447,3 +447,397 @@ def check_cascade_loading(
         passed=passed,
         warnings=warnings,
     )
+
+
+# ==============================================================================
+# Multi-Domain Analytical Sizing (Op-Amps, MOSFETs, Filters, RF Matching, Power)
+# ==============================================================================
+
+@dataclass
+class VoltageDividerResult:
+    """Analytical result for a precision E-series voltage divider or feedback network."""
+    r_top: float
+    r_bot: float
+    target_ratio: float
+    actual_ratio: float
+    v_in: float
+    v_out_actual: float
+    error_pct: float
+    thevenin_r_ohms: float
+    quiescent_current_a: float
+
+
+def size_voltage_divider(
+    v_in: float,
+    v_out_target: float,
+    r_total_target: float = 20e3,
+    series: str = "E24",
+) -> VoltageDividerResult:
+    """
+    Find the optimal commercial E12/E24/E96 resistor pair (R_top, R_bot) that minimizes
+    output voltage error for V_out = V_in * R_bot / (R_top + R_bot) near `r_total_target`.
+    Also used for LDO / DC-DC converter feedback networks where V_in is V_out_reg and V_out_target is V_ref.
+    """
+    if v_out_target <= 0 or v_out_target >= v_in:
+        raise ValueError(f"v_out_target ({v_out_target}) must be strictly between 0 and v_in ({v_in}).")
+    target_ratio = v_out_target / v_in
+    r_bot_ideal = r_total_target * target_ratio
+    r_bot_base, _ = snap_to_series(r_bot_ideal, series=series)
+
+    mantissas = SERIES_MAP[series.upper()]
+    exp_bot = math.floor(math.log10(r_bot_base))
+    bot_candidates = [m * (10.0 ** e) for e in (exp_bot - 1, exp_bot, exp_bot + 1) for m in mantissas]
+
+    best_pair = (0.0, 0.0)
+    best_err = float("inf")
+    for rb in bot_candidates:
+        if rb < 0.15 * r_bot_ideal or rb > 6.0 * r_bot_ideal:
+            continue
+        rt_ideal = rb * (1.0 - target_ratio) / target_ratio
+        rt, _ = snap_to_series(rt_ideal, series=series)
+        ratio = rb / (rt + rb)
+        err = abs(ratio - target_ratio) / target_ratio
+        if err < best_err:
+            best_err = err
+            best_pair = (rt, rb)
+
+    r_top, r_bot = best_pair
+    actual_ratio = r_bot / (r_top + r_bot)
+    v_out_actual = v_in * actual_ratio
+    err_pct = ((v_out_actual - v_out_target) / v_out_target) * 100.0
+    r_th = (r_top * r_bot) / (r_top + r_bot)
+    i_q = v_in / (r_top + r_bot)
+    return VoltageDividerResult(
+        r_top=r_top,
+        r_bot=r_bot,
+        target_ratio=target_ratio,
+        actual_ratio=actual_ratio,
+        v_in=v_in,
+        v_out_actual=v_out_actual,
+        error_pct=err_pct,
+        thevenin_r_ohms=r_th,
+        quiescent_current_a=i_q,
+    )
+
+
+@dataclass
+class OpAmpStageResult:
+    """Analytical sizing and small-signal bandwidth result for an Op-Amp stage."""
+    topology: str
+    r_in_or_g: float
+    r_f: float
+    target_gain_vv: float
+    actual_gain_vv: float
+    gain_db: float
+    gain_error_pct: float
+    noise_gain_vv: float
+    f_3db_hz: float
+    z_in_ohms: float
+
+
+def size_opamp_stage(
+    target_gain_vv: float,
+    topology: str = "non_inverting",
+    r_input_target: float = 10e3,
+    gbw_hz: float = 10e6,
+    series: str = "E24",
+) -> OpAmpStageResult:
+    """
+    Size an Inverting (`Av = -Rf / Rin`) or Non-Inverting (`Av = 1 + Rf / Rg`) operational
+    amplifier stage in commercial E12/E24/E96 values and compute its closed-loop -3dB bandwidth.
+    """
+    topo = topology.strip().lower().replace("-", "_")
+    r_g, _ = snap_to_series(r_input_target, series=series)
+
+    if topo == "inverting":
+        mag = abs(target_gain_vv)
+        r_f_ideal = r_g * mag
+        r_f, _ = snap_to_series(r_f_ideal, series=series)
+        actual_av = -(r_f / r_g)
+        noise_gain = 1.0 + (r_f / r_g)
+        z_in = r_g
+        target_signed = -mag
+    else:
+        if abs(target_gain_vv) < 1.0:
+            raise ValueError("Non-inverting op-amp gain must be >= 1.0 V/V.")
+        mag = abs(target_gain_vv)
+        if math.isclose(mag, 1.0, rel_tol=1e-4):
+            r_f = 0.0
+            actual_av = 1.0
+            noise_gain = 1.0
+        else:
+            r_f_ideal = r_g * (mag - 1.0)
+            r_f, _ = snap_to_series(r_f_ideal, series=series)
+            actual_av = 1.0 + (r_f / r_g)
+            noise_gain = actual_av
+        z_in = 1e12  # High-Z non-inverting input
+        target_signed = mag
+
+    err_pct = ((abs(actual_av) - abs(target_signed)) / abs(target_signed)) * 100.0
+    gain_db = 20.0 * math.log10(abs(actual_av)) if actual_av != 0 else -float("inf")
+    f_3db = gbw_hz / noise_gain
+    return OpAmpStageResult(
+        topology=topo,
+        r_in_or_g=r_g,
+        r_f=r_f,
+        target_gain_vv=target_signed,
+        actual_gain_vv=actual_av,
+        gain_db=gain_db,
+        gain_error_pct=err_pct,
+        noise_gain_vv=noise_gain,
+        f_3db_hz=f_3db,
+        z_in_ohms=z_in,
+    )
+
+
+@dataclass
+class MOSFETOperatingPointResult:
+    """Analytical DC and small-signal operating point for a Common-Source or Source-Follower MOSFET stage."""
+    v_g: float
+    v_s: float
+    v_d: float
+    v_gs: float
+    v_ds: float
+    v_ov: float
+    i_d: float
+    g_m: float
+    z_in_stage: float
+    voltage_gain_loaded: float
+    region: str  # "SATURATION", "TRIODE_RISK", or "CUTOFF"
+
+
+def size_mosfet_stage(
+    v_dd: float,
+    r_g1: float,
+    r_g2: float,
+    r_d: float,
+    r_s: float,
+    k_p: float = 2e-3,
+    v_th: float = 1.5,
+    r_s_ac_unbypassed: Optional[float] = None,
+    r_load_ac: Optional[float] = None,
+    topology: str = "CS",
+) -> MOSFETOperatingPointResult:
+    """
+    Solve the exact quadratic saturation equation I_D = 0.5 * k_p * (V_G - I_D * R_S - V_th)^2
+    for an NMOS stage and compute small-signal g_m and loaded voltage gain A_v.
+    """
+    v_g = v_dd * (r_g2 / (r_g1 + r_g2))
+    z_in = (r_g1 * r_g2) / (r_g1 + r_g2)
+
+    if v_g <= v_th:
+        return MOSFETOperatingPointResult(
+            v_g=v_g, v_s=0.0, v_d=v_dd, v_gs=v_g, v_ds=v_dd, v_ov=0.0,
+            i_d=0.0, g_m=0.0, z_in_stage=z_in, voltage_gain_loaded=0.0, region="CUTOFF"
+        )
+
+    v_eff = v_g - v_th
+    if r_s <= 0:
+        i_d = 0.5 * k_p * (v_eff ** 2)
+    else:
+        # 0.5 * k_p * R_S^2 * I_D^2 - (k_p * R_S * v_eff + 1) * I_D + 0.5 * k_p * v_eff^2 = 0
+        a = 0.5 * k_p * (r_s ** 2)
+        b = -(k_p * r_s * v_eff + 1.0)
+        c = 0.5 * k_p * (v_eff ** 2)
+        disc = max(0.0, b * b - 4.0 * a * c)
+        # Smaller root guarantees V_GS > V_th
+        i_d = (-b - math.sqrt(disc)) / (2.0 * a)
+
+    v_s = i_d * r_s
+    v_d = v_dd - i_d * r_d
+    v_gs = v_g - v_s
+    v_ds = v_d - v_s
+    v_ov = max(0.0, v_gs - v_th)
+    g_m = k_p * v_ov
+
+    r_s_ac = r_s if r_s_ac_unbypassed is None else r_s_ac_unbypassed
+    if topology.upper() in ("CD", "SF"):
+        r_s_eff = (r_s * r_load_ac) / (r_s + r_load_ac) if r_load_ac else r_s
+        av = (g_m * r_s_eff) / (1.0 + g_m * r_s_eff)
+    else:
+        r_d_eff = (r_d * r_load_ac) / (r_d + r_load_ac) if (r_load_ac and r_d > 0) else r_d
+        av = -(g_m * r_d_eff) / (1.0 + g_m * r_s_ac)
+
+    region = "SATURATION" if v_ds >= v_ov else "TRIODE_RISK"
+    return MOSFETOperatingPointResult(
+        v_g=v_g,
+        v_s=v_s,
+        v_d=v_d,
+        v_gs=v_gs,
+        v_ds=v_ds,
+        v_ov=v_ov,
+        i_d=i_d,
+        g_m=g_m,
+        z_in_stage=z_in,
+        voltage_gain_loaded=av,
+        region=region,
+    )
+
+
+@dataclass
+class FilterSizingResult:
+    """Analytical component sizing result for passive RC/RLC and active Sallen-Key filters."""
+    filter_type: str
+    f_target_hz: float
+    f_actual_hz: float
+    freq_error_pct: float
+    q_target: float
+    q_actual: float
+    bandwidth_hz: float
+    components: Dict[str, float]
+
+
+def size_passive_filter(
+    f_cutoff_hz: float,
+    filter_type: str = "rc_lowpass",
+    r_characteristic: float = 1000.0,
+    q_factor: float = 5.0,
+    series: str = "E24",
+) -> FilterSizingResult:
+    """
+    Size 1st-order RC (`rc_lowpass`, `rc_highpass`) or 2nd-order RLC (`rlc_series_bandpass`,
+    `rlc_parallel_bandpass`) filters using commercial E12/E24/E96 components.
+    """
+    ftype = filter_type.strip().lower()
+    r_snap, _ = snap_to_series(r_characteristic, series=series)
+    omega = 2.0 * math.pi * f_cutoff_hz
+
+    if ftype in ("rc_lowpass", "rc_highpass", "rc"):
+        c_ideal = 1.0 / (omega * r_snap)
+        c_snap, _ = snap_to_series(c_ideal, series=series)
+        f_act = 1.0 / (2.0 * math.pi * r_snap * c_snap)
+        err = ((f_act - f_cutoff_hz) / f_cutoff_hz) * 100.0
+        return FilterSizingResult(
+            filter_type=ftype,
+            f_target_hz=f_cutoff_hz,
+            f_actual_hz=f_act,
+            freq_error_pct=err,
+            q_target=0.5,
+            q_actual=0.5,
+            bandwidth_hz=f_act,
+            components={"R": r_snap, "C": c_snap},
+        )
+
+    # 2nd-order RLC Band-Pass
+    if ftype == "rlc_parallel_bandpass":
+        c_ideal = q_factor / (omega * r_snap)
+        c_snap, _ = snap_to_series(c_ideal, series=series)
+        l_ideal = 1.0 / ((omega ** 2) * c_snap)
+        l_snap, _ = snap_to_series(l_ideal, series=series)
+        f_act = 1.0 / (2.0 * math.pi * math.sqrt(l_snap * c_snap))
+        q_act = r_snap * math.sqrt(c_snap / l_snap)
+    else:
+        l_ideal = (q_factor * r_snap) / omega
+        l_snap, _ = snap_to_series(l_ideal, series=series)
+        c_ideal = 1.0 / ((omega ** 2) * l_snap)
+        c_snap, _ = snap_to_series(c_ideal, series=series)
+        f_act = 1.0 / (2.0 * math.pi * math.sqrt(l_snap * c_snap))
+        q_act = (1.0 / r_snap) * math.sqrt(l_snap / c_snap)
+
+    err = ((f_act - f_cutoff_hz) / f_cutoff_hz) * 100.0
+    bw = f_act / q_act if q_act > 0 else f_act
+    return FilterSizingResult(
+        filter_type=ftype,
+        f_target_hz=f_cutoff_hz,
+        f_actual_hz=f_act,
+        freq_error_pct=err,
+        q_target=q_factor,
+        q_actual=q_act,
+        bandwidth_hz=bw,
+        components={"R": r_snap, "L": l_snap, "C": c_snap},
+    )
+
+
+def size_sallen_key_filter(
+    f_cutoff_hz: float,
+    q_factor: float = 0.7071,  # Butterworth = 0.7071, Bessel = 0.5774
+    c_base: float = 10e-9,
+    series: str = "E24",
+) -> FilterSizingResult:
+    """
+    Size a 2nd-order unity-gain Sallen-Key Active Low-Pass Filter with commercial E12/E24/E96 values.
+    For unity gain with equal resistors (R1 = R2 = R), C1 = 2 * Q * C_eq and C2 = C_eq / (2 * Q).
+    """
+    c2_snap, _ = snap_to_series(c_base, series=series)
+    c1_ideal = c2_snap * (4.0 * (q_factor ** 2))
+    c1_snap, _ = snap_to_series(c1_ideal, series=series)
+
+    omega = 2.0 * math.pi * f_cutoff_hz
+    r_ideal = 1.0 / (omega * math.sqrt(c1_snap * c2_snap))
+    r1_snap, _ = snap_to_series(r_ideal, series=series)
+    r2_snap = r1_snap
+
+    f_act = 1.0 / (2.0 * math.pi * math.sqrt(r1_snap * r2_snap * c1_snap * c2_snap))
+    q_act = math.sqrt(r1_snap * r2_snap * c1_snap * c2_snap) / (c2_snap * (r1_snap + r2_snap))
+    err = ((f_act - f_cutoff_hz) / f_cutoff_hz) * 100.0
+    return FilterSizingResult(
+        filter_type="sallen_key_lowpass",
+        f_target_hz=f_cutoff_hz,
+        f_actual_hz=f_act,
+        freq_error_pct=err,
+        q_target=q_factor,
+        q_actual=q_act,
+        bandwidth_hz=f_act,
+        components={"R1": r1_snap, "R2": r2_snap, "C1": c1_snap, "C2": c2_snap},
+    )
+
+
+@dataclass
+class LMatchingResult:
+    """Analytical RF L-network impedance matching synthesis result."""
+    r_source: float
+    r_load: float
+    f_0_hz: float
+    q_network: float
+    x_series_ohms: float
+    x_shunt_ohms: float
+    l_henries: float
+    c_farads: float
+    topology_note: str
+
+
+def size_l_matching_network(
+    r_source: float,
+    r_load: float,
+    f_0_hz: float,
+    dc_feed_lowpass: bool = True,
+    series: str = "E24",
+) -> LMatchingResult:
+    """
+    Synthesize a Narrowband RF L-Section Impedance Matching Network between `r_source` and `r_load`
+    at `f_0_hz` using commercial E12/E24/E96 L and C values.
+    """
+    if math.isclose(r_source, r_load, rel_tol=1e-3):
+        raise ValueError("r_source and r_load are already matched.")
+    r_high = max(r_source, r_load)
+    r_low = min(r_source, r_load)
+    q_s = math.sqrt((r_high / r_low) - 1.0)
+    x_s = q_s * r_low
+    x_p = r_high / q_s
+    omega = 2.0 * math.pi * f_0_hz
+
+    if dc_feed_lowpass:
+        # Series L on low-Z side, Shunt C across high-Z side
+        l_ideal = x_s / omega
+        c_ideal = 1.0 / (omega * x_p)
+        note = "Low-pass L-match (Series L on low-Z port, Shunt C across high-Z port)"
+    else:
+        # Series C on low-Z side, Shunt L across high-Z side
+        c_ideal = 1.0 / (omega * x_s)
+        l_ideal = x_p / omega
+        note = "High-pass L-match (Series C on low-Z port, Shunt L across high-Z port)"
+
+    l_snap, _ = snap_to_series(l_ideal, series=series)
+    c_snap, _ = snap_to_series(c_ideal, series=series)
+    return LMatchingResult(
+        r_source=r_source,
+        r_load=r_load,
+        f_0_hz=f_0_hz,
+        q_network=q_s,
+        x_series_ohms=x_s,
+        x_shunt_ohms=x_p,
+        l_henries=l_snap,
+        c_farads=c_snap,
+        topology_note=note,
+    )
+

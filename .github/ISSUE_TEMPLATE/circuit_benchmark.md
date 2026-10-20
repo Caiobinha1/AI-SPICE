@@ -1,6 +1,6 @@
 ---
 name: New Circuit Benchmark Proposal
-about: Submit a new analog or RF circuit benchmark to the IA-SPICE verification suite
+about: Submit a new electronic, analog, or RF circuit benchmark to the AI-SPICE verification suite
 title: "[BENCHMARK] "
 labels: enhancement, benchmark
 ---
