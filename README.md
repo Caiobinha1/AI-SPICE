@@ -34,44 +34,14 @@ When standard LLMs are asked to design or modify electronic circuits directly, t
 ## 🏛️ System Architecture
 
 ```mermaid
-flowchart TD
-    subgraph INPUT["1. Multi-Modal Input & Specification Layer"]
-        direction TB
-        I1["📋 Natural Language Specs\nTarget Gain, BW, f0, Pout, Z, THD"]
-        I2["📸 Vision-to-SPICE Input\nHand-Drawn Sketches, Photos, Datasheets"]
-        I3["📂 Existing SPICE / LTspice Projects\n.asc, .cir, .net, .lib, .sub, .asy, .plt"]
-    end
-
-    subgraph ENGINE["2. First-Principles Analytical & Topological Synthesis Engine"]
-        direction TB
-        S1["📐 Analytical Equation Solver\n• Operating Point & Bias Synthesis\n• Transfer Function & Pole-Zero Placement\n• Resonance, Stability & Feedback Margins\n• Commercial E12 / E24 / E96 Quantization"]
-        S2["🔗 Hierarchical StageContract Verifier\n• Multi-Stage Cascade Decomposition\n• Bidirectional Impedance Auditing (Zin / Zout)\n• Automated Buffer & Matching Synthesis"]
-        S3["🎨 Topological 16px .asc Schematic Compiler\n• Left-to-Right Functional Stage Grouping\n• Orthogonal Manhattan Signal Wire Router\n• Native & Custom .asy Symbol Pin Calibration\n• Geometric DRC & Auto-Footer Directives"]
-        S1 --> S2 --> S3
-    end
-
-    subgraph LOOP["3. Closed-Loop Headless SPICE Verification & Diagnostics"]
-        direction TB
-        V1["🔍 Formal Netlist Isomorphism Gate\nLTspice -netlist Connectivity Audit (NC_ = 0)"]
-        V2["⚙️ Headless Batch Simulation Engine\n.op / .dc / .ac / .tran / .step / .meas Execution"]
-        V3["📊 Deterministic Telemetry & .log Parser\nScalar, Stepped, dB/Phase & Time-Domain Extraction"]
-        V4{"✅ All Physical & Spec\nTargets Converged?"}
-        V5["🩺 Physics-Based Failure Diagnostics\nBias Saturation/Cutoff, Loading Collapse,\nGain/Loop Deficit, Frequency Drift, Instability"]
-        V1 --> V2 --> V3 --> V4
-        V4 -- "No (Closed-Loop Refinement)" --> V5
-    end
-
-    subgraph OUTPUT["4. Verified Engineering Deliverables"]
-        direction TB
-        O1["🔌 Publication-Grade Wired .asc Schematic\n+ Configured .plt Waveform Layouts"]
-        O2["📜 Self-Contained .cir / .net SPICE Netlists\n+ Vendor .lib / .sub Macro-Models"]
-        O3["📈 Technical Design & Verification Reports\nSpec-vs-Measured Tables, Plots & Testbench Guides"]
-    end
-
-    INPUT --> ENGINE
-    S3 --> V1
-    V5 -. "Automated Parameter & Topology Adjustment" .-> S1
-    V4 -- "Yes (Verified)" --> OUTPUT
+flowchart LR
+    A["🎯 Multi-Modal Input\n• Design Specs\n• Schematic Photo\n• Existing .asc / .cir"] --> B["📐 Analytical Sizing\n• DC / AC / RF Equations\n• Transfer & Stability\n• E12 / E24 / E96 Series"]
+    B --> C["🔗 StageContract\n• Cascade Isolation\n• Z_in / Z_out Audit\n• Auto-Buffer / Match"]
+    C --> D["🎨 16px .asc Compiler\n• Topological Blocks\n• Orthogonal Signal Wires\n• Geometric DRC (NC_ = 0)"]
+    D --> E["⚙️ Headless LTspice\n• .op / .dc / .ac / .tran\n• Batch Simulation\n• .meas Log Parser"]
+    E --> F{"✅ Physics & Spec\nVerified?"}
+    F -- "No (Diagnostics)" --> B
+    F -- "Yes (Converged)" --> G["📊 Deliverables\n• Wired .asc & .plt\n• Self-Contained .cir\n• Report & Plots"]
 ```
 
 ---
