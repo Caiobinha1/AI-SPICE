@@ -1,0 +1,54 @@
+* 3-Stage Cascaded BJT Multi-Mode Amplifier (CB -> CE -> CC)
+* Designed and Synthesized by AI-SPICE
+* Stage 1: Common Base (CB) - Low Zin (~20 Ohm), Non-Inverting Voltage Gain
+* Stage 2: Common Emitter (CE) - High Inverting Voltage Gain, Degenerated for Stability
+* Stage 3: Common Collector (CC / Emitter Follower) - High Zin, Low Zout (~25 Ohm) Output Buffer
+
+VIN IN 0 SINE(0 1m 1k)
+CIN E1 IN 10u
+R1_CB VCC B1 47k
+R2_CB B1 0 10k
+CB1 B1 0 10u
+Q1 C1 B1 E1 0 2N2222
+RC1 VCC C1 2.2k
+RE1 E1 0 1k
+
+C12 B2 C1 10u
+R1_CE VCC B2 68k
+R2_CE B2 0 22k
+Q2 C2 B2 E2 0 2N2222
+RC2 VCC C2 3.3k
+RE2_RF E2 E2_MID 47
+RE2_DC E2_MID 0 1k
+CE2 E2_MID 0 47u
+
+C23 B3 C2 10u
+R1_CC VCC B3 33k
+R2_CC B3 0 33k
+Q3 VCC B3 E3 0 2N2222
+RE3 E3 0 1.5k
+
+COUT OUT E3 10u
+RLOAD OUT 0 1k
+VCC VCC 0 12
+
+.model 2N2222 NPN(IS=1E-14 BF=150 VAF=100)
+.tran 0 5m 0 1u
+.options plotwinsize=0
+
+.meas TRAN vin_max MAX V(IN) FROM=3m TO=5m
+.meas TRAN vin_min MIN V(IN) FROM=3m TO=5m
+.meas TRAN vin_pp PARAM (vin_max - vin_min)
+
+.meas TRAN vc1_pp PP V(C1) FROM=3m TO=5m
+.meas TRAN vc2_pp PP V(C2) FROM=3m TO=5m
+
+.meas TRAN vout_max MAX V(OUT) FROM=3m TO=5m
+.meas TRAN vout_min MIN V(OUT) FROM=3m TO=5m
+.meas TRAN vout_pp PARAM (vout_max - vout_min)
+
+.meas TRAN gain_stage1 PARAM (vc1_pp / vin_pp)
+.meas TRAN gain_stage2 PARAM (vc2_pp / vc1_pp)
+.meas TRAN gain_stage3 PARAM (vout_pp / vc2_pp)
+.meas TRAN gain_vv PARAM (vout_pp / vin_pp)
+.end

@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 from ia_spice.ltspice_project import compile_netlist_to_asc, verify_asc_netlist
 from ia_spice.simulator import run_ltspice_batch
-from ia_spice.sizing import size_bjt_OperatingPoint
+from ia_spice.sizing import StageContract, check_cascade_loading, size_bjt_OperatingPoint
 
 
 NETLIST_COMMON_EMITTER = """* Common Emitter BJT Amplifier
@@ -178,6 +178,50 @@ class TestStep9AmplifierTopologies(unittest.TestCase):
             gain = sim.parsed_log.get_scalar("gain_vv")
             self.assertIsNotNone(gain)
             self.assertGreater(gain, 30.0, f"Expected CB voltage gain > 30, got {gain}")
+
+    def test_three_stage_cascaded_multimode_amplifier(self):
+        """Integrated 3-stage amplifier combining CB (input), CE (gain), and CC (buffer) in cascade."""
+        showcase_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "showcase", "07_three_stage_multimode_amplifier"))
+        cir_path = os.path.join(showcase_dir, "three_stage_multimode_amplifier.cir")
+        asc_path = os.path.join(showcase_dir, "three_stage_multimode_amplifier.asc")
+
+        self.assertTrue(os.path.isfile(cir_path), f"Missing CIR: {cir_path}")
+        self.assertTrue(os.path.isfile(asc_path), f"Missing ASC: {asc_path}")
+
+        # 1. Analytical Sizing & Cascade Loading Contract Verification
+        vcc = 12.0
+        cb_op = size_bjt_OperatingPoint(v_cc=vcc, r1=47000, r2=10000, r_e_dc=1000, r_c=2200, r_load_ac=5800, beta=150, topology="CB")
+        ce_op = size_bjt_OperatingPoint(v_cc=vcc, r1=68000, r2=22000, r_e_dc=1000, r_c=3300, r_e_rf_unbypassed=47, r_load_ac=14000, beta=150, topology="CE")
+        cc_op = size_bjt_OperatingPoint(v_cc=vcc, r1=33000, r2=33000, r_e_dc=1500, r_c=0, r_load_ac=1000, beta=150, topology="CC")
+
+        c_cb = StageContract("CB_Input", z_in_ohms=cb_op.z_in_stage, z_out_ohms=2200, unloaded_gain_vv=abs(cb_op.voltage_gain_loaded))
+        c_ce = StageContract("CE_Gain", z_in_ohms=ce_op.z_in_stage, z_out_ohms=3300, unloaded_gain_vv=abs(ce_op.voltage_gain_loaded))
+        c_cc = StageContract("CC_Buffer", z_in_ohms=cc_op.z_in_stage, z_out_ohms=25, unloaded_gain_vv=cc_op.voltage_gain_loaded)
+
+        rep1 = check_cascade_loading(c_cb, c_ce)
+        rep2 = check_cascade_loading(c_ce, c_cc)
+        self.assertTrue(rep1.passed, f"CB->CE loading failed: {rep1.warnings}")
+        self.assertTrue(rep2.passed, f"CE->CC loading failed: {rep2.warnings}")
+
+        # 2. Formal Netlist Isomorphism Verification (Zero floating pins NC_ = 0)
+        ver = verify_asc_netlist(asc_path, reference_cir_path=cir_path)
+        self.assertTrue(ver.is_clean, f"3-stage verification failed: {ver.mismatches}")
+        self.assertEqual(ver.unconnected_pins, [])
+
+        # 3. Headless LTspice Batch Simulation & Measurement Telemetry
+        sim = run_ltspice_batch(asc_path)
+        self.assertTrue(sim.succeeded, f"3-stage simulation failed: {sim.diagnostics}")
+
+        gain_s1 = sim.parsed_log.get_scalar("gain_stage1")
+        gain_s2 = sim.parsed_log.get_scalar("gain_stage2")
+        gain_s3 = sim.parsed_log.get_scalar("gain_stage3")
+        gain_tot = sim.parsed_log.get_scalar("gain_vv")
+
+        self.assertGreater(gain_s1, 50.0, f"Stage 1 (CB) gain too low: {gain_s1}")
+        self.assertGreater(gain_s2, 35.0, f"Stage 2 (CE) gain too low: {gain_s2}")
+        self.assertGreater(gain_s3, 0.75, f"Stage 3 (CC) buffer gain too low: {gain_s3}")
+        self.assertLess(gain_s3, 1.05, f"Stage 3 (CC) buffer gain > unity: {gain_s3}")
+        self.assertGreater(gain_tot, 2000.0, f"Total cascaded gain too low: {gain_tot}")
 
 
 if __name__ == "__main__":
