@@ -195,7 +195,11 @@ def verify_asc_netlist(
                 continue
             report.missing_components.append(comp_name)
             continue
-        act_nodes = actual_map[act_key]
+        act_nodes = list(actual_map[act_key])
+        if len(act_nodes) > len(exp_nodes) and comp_name.startswith("X"):
+            # Subcircuit symbols in LTspice (e.g. UniversalOpamp2) may emit extra unkeyed model/level tokens (e.g. 'level2')
+            if _nodes_match_with_aliasing(exp_nodes, act_nodes[: len(exp_nodes)], alias_map):
+                act_nodes = act_nodes[: len(exp_nodes)]
         match = _nodes_match_with_aliasing(exp_nodes, act_nodes, alias_map)
         if not match and len(exp_nodes) == 2 and (comp_name[0] in SYMMETRIC_2PIN_PREFIXES or comp_name.startswith("X")):
             match = _nodes_match_with_aliasing(exp_nodes, act_nodes[::-1], alias_map)

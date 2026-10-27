@@ -130,6 +130,13 @@ Generating valid LTspice `.asc` schematics programmatically is notoriously diffi
    - **Topology-Aware Active Stage Layouts (CE, CC, CB)**:
      - Automatically synthesizes parallel bypass branches (e.g. $R_E \parallel C_E$ in Common Emitter, $R_2 \parallel C_B$ in Common Base) placed side-by-side ($dx = 96\text{ px}$) with single horizontal bridging wires.
      - Aligns input stimuli and output taps collinearly along active device signal pins: Base ($y = 288$), Collector ($y = 224$), or Emitter ($y = 368$), producing straight horizontal paths with zero doglegs across all three configurations.
+   - **Generalized Multi-Domain Circuit Topologies**:
+     - **Full-Wave Diode Bridge Rectifiers**: Recognizes 4-diode bridges across AC secondary nodes, generating parallel vertical legs with central AC taps ($y = 288$), top positive DC rails, and bottom negative/ground rails without shorting diodes.
+     - **Graph-Theoretic DAG Load Deferral**: Uses breadth-first search (BFS) on circuit signal reachability to dynamically defer terminating loads ($R_L$) until all converging parallel feed-forward paths (e.g. Twin-T notch filter branches, multi-path summing nodes) have completed placement.
+     - **Active Filter Input Shunts**: Captures and routes passive ground shunts connected directly to active device input terminals (e.g. $C_2$ in Sallen-Key low-pass filters) strictly *before* placing the active Op-Amp block.
+     - **Multi-Stage LC Ladder Networks**: Synthesizes alternating series inductive ($L$) and shunt capacitive ($C$) branches in strictly monotonic ascending spatial sequence ($x(R_S) < x(L_1) < x(C_1) < x(L_2) < x(C_2) < \dots < x(R_L)$).
+     - **Antiparallel Diode Clipping Pairs**: Identifies reverse-parallel diode pairs, generating side-by-side vertical branches ($dx = 96\text{ px}$) bounded by dual horizontal rails at $y = 288$ and $y = 352$ for symmetrical clipping.
+     - **Differential Pairs**: Compiles dual-transistor differential amplifiers with shared emitter/source tail impedances and collector/drain pull-ups.
 3. **100% Orthogonal Manhattan Signal Wiring (`wire_signal_nets_on_schematic`)**:
    - Connects all non-power signal, bias, and feedback nets using physical orthogonal `WIRE` segments on the 16-pixel grid (`NC_ = 0`), retaining a single clean net label per continuous wire.
    - Enforces protective bounding boxes around component bodies, symbol text, and power flags so routed wires never cause accidental short circuits or visual overlaps.

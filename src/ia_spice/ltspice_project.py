@@ -1073,6 +1073,66 @@ def _is_decoupling_cap(comp: SpiceNetlistComponent) -> bool:
     return (_is_power_node(n0) and n1 == "0") or (_is_power_node(n1) and n0 == "0")
 
 
+def _check_bridge_rectifier(diodes: List[SpiceNetlistComponent]):
+    """
+    Check if 4 diodes form a Full-Wave Bridge Rectifier (2 AC nodes, 2 DC nodes).
+    Returns (leg1, leg2, dc_pos, dc_neg, ac1, ac2) or None.
+    """
+    if len(diodes) != 4:
+        return None
+    node_counts: Dict[str, int] = {}
+    for d in diodes:
+        for n in d.nodes:
+            node_counts[n] = node_counts.get(n, 0) + 1
+    if len(node_counts) != 4 or not all(c == 2 for c in node_counts.values()):
+        return None
+    anodes = [d.nodes[0] for d in diodes]
+    cathodes = [d.nodes[1] for d in diodes]
+    dc_pos = [n for n in set(cathodes) if cathodes.count(n) == 2]
+    dc_neg = [n for n in set(anodes) if anodes.count(n) == 2]
+    if len(dc_pos) != 1 or len(dc_neg) != 1:
+        return None
+    p_node, n_node = dc_pos[0], dc_neg[0]
+    ac_nodes = list(set(node_counts.keys()) - {p_node, n_node})
+    if len(ac_nodes) != 2:
+        return None
+    ac1, ac2 = ac_nodes[0], ac_nodes[1]
+    leg1 = [d for d in diodes if ac1 in d.nodes]
+    leg2 = [d for d in diodes if ac2 in d.nodes]
+    if len(leg1) != 2 or len(leg2) != 2:
+        return None
+    top1_cands = [d for d in leg1 if d.nodes[1] == p_node]
+    bot1_cands = [d for d in leg1 if d.nodes[0] == n_node]
+    top2_cands = [d for d in leg2 if d.nodes[1] == p_node]
+    bot2_cands = [d for d in leg2 if d.nodes[0] == n_node]
+    if not (top1_cands and bot1_cands and top2_cands and bot2_cands):
+        return None
+    return (
+        [top1_cands[0], bot1_cands[0]],
+        [top2_cands[0], bot2_cands[0]],
+        p_node, n_node, ac1, ac2
+    )
+
+
+def _find_series_diode_chain(diodes: List[SpiceNetlistComponent]) -> Optional[List[SpiceNetlistComponent]]:
+    """Return ordered list of diodes in a true head-to-tail series chain, or None."""
+    if len(diodes) < 2:
+        return None
+    cathodes = {d.nodes[1] for d in diodes}
+    heads = [d for d in diodes if d.nodes[0] not in cathodes]
+    if len(heads) != 1:
+        return None
+    chain = [heads[0]]
+    curr = heads[0]
+    while len(chain) < len(diodes):
+        nxt = [d for d in diodes if d not in chain and d.nodes[0] == curr.nodes[1]]
+        if len(nxt) != 1:
+            return None
+        chain.append(nxt[0])
+        curr = nxt[0]
+    return chain
+
+
 def _group_into_functional_columns(comps: List[SpiceNetlistComponent]) -> List[List[SpiceNetlistComponent]]:
     """
     Partition netlist components into logical left-to-right functional stage columns:
@@ -1127,7 +1187,19 @@ def _group_into_functional_columns(comps: List[SpiceNetlistComponent]) -> List[L
         used.add(s.inst_name)
         cur_node = s.nodes[0] if s.nodes[1] == "0" else s.nodes[1]
         for _ in range(5):
-            if cur_node in active_nodes or cur_node == "0" or _is_power_node(cur_node):
+            if cur_node == "0" or _is_power_node(cur_node):
+                break
+            if cur_node in active_nodes:
+                # Place any unplaced shunt passive on this active input node (e.g. C2 in Sallen-Key or input termination)
+                if cur_node in opamp_connected_nodes:
+                    shunts_here = [
+                        sh for sh in comps
+                        if sh.inst_name not in used and len(sh.nodes) == 2
+                        and cur_node in sh.nodes and "0" in sh.nodes
+                    ]
+                    for sh in shunts_here:
+                        columns.append([sh])
+                        used.add(sh.inst_name)
                 break
             # Check for unplaced shunt elements on cur_node (excluding bias dividers that also connect to power)
             has_power_pullup = any(
@@ -1236,29 +1308,41 @@ def _group_into_functional_columns(comps: List[SpiceNetlistComponent]) -> List[L
                         mid_fb_nodes.add(n)
         columns.append(fb_col)
 
-    # Diode Bias Column (`RBP`, `D1`, `D2`, `RBN`) if diodes are present
+    # Diode structures: Full-Wave Bridge Rectifier, Antiparallel clipper pair, or Series Bias Chain
     diodes = [c for c in comps if c.prefix == "D" and c.inst_name not in used]
-    if len(diodes) >= 2:
-        d_nodes = {n for d in diodes for n in d.nodes}
-        bias_res = [
-            r for r in comps
-            if r.inst_name not in used and r.prefix == "R"
-            and any(n in d_nodes for n in r.nodes)
-            and any(_is_power_node(n) for n in r.nodes)
-        ]
-        r_top_b = [r for r in bias_res if any(n.upper().startswith(("VCC", "VDD", "VP", "+")) for n in r.nodes)]
-        r_bot_b = [r for r in bias_res if r not in r_top_b]
-        bias_col: List[SpiceNetlistComponent] = []
-        for r in r_top_b:
-            bias_col.append(r)
-            used.add(r.inst_name)
-        for d in diodes:
-            bias_col.append(d)
+    bridge_info = _check_bridge_rectifier(diodes)
+    if bridge_info:
+        leg1, leg2, _, _, _, _ = bridge_info
+        columns.append(leg1)
+        for d in leg1:
             used.add(d.inst_name)
-        for r in r_bot_b:
-            bias_col.append(r)
-            used.add(r.inst_name)
-        columns.append(bias_col)
+        columns.append(leg2)
+        for d in leg2:
+            used.add(d.inst_name)
+    else:
+        s_chain = _find_series_diode_chain(diodes)
+        if s_chain:
+            d_nodes = {n for d in s_chain for n in d.nodes}
+            bias_res = [
+                r for r in comps
+                if r.inst_name not in used and r.prefix == "R"
+                and any(n in d_nodes for n in r.nodes)
+                and any(_is_power_node(n) for n in r.nodes)
+            ]
+            r_top_b = [r for r in bias_res if any(n.upper().startswith(("VCC", "VDD", "VP", "+")) for n in r.nodes)]
+            r_bot_b = [r for r in bias_res if r not in r_top_b]
+            if r_top_b or r_bot_b:
+                bias_col: List[SpiceNetlistComponent] = []
+                for r in r_top_b:
+                    bias_col.append(r)
+                    used.add(r.inst_name)
+                for d in s_chain:
+                    bias_col.append(d)
+                    used.add(d.inst_name)
+                for r in r_bot_b:
+                    bias_col.append(r)
+                    used.add(r.inst_name)
+                columns.append(bias_col)
 
     # Complementary Push-Pull BJT Column (`Q_npn`, `RE1`, `RE2`, `Q_pnp`) if both NPN and PNP exist
     rem_qs = [c for c in comps if c.prefix == "Q" and c.inst_name not in used]
@@ -1293,10 +1377,62 @@ def _group_into_functional_columns(comps: List[SpiceNetlistComponent]) -> List[L
                 if n != "0" and not _is_power_node(n):
                     placed_nodes.add(n)
 
+    # Identify circuit input signal source nodes (excluding DC power rails and ground)
+    signal_source_nodes: Set[str] = {
+        n for c in comps
+        if c.prefix in ("V", "I") and not _is_dc_power_supply(c)
+        for n in c.nodes if n != "0" and not _is_power_node(n)
+    }
+    if not signal_source_nodes:
+        signal_source_nodes = {"IN"}
+
+    def _can_reach_source_without_node(target_node: str, forbidden_node: str) -> bool:
+        visited = {forbidden_node, "0"}
+        queue = [target_node]
+        visited.add(target_node)
+        while queue:
+            curr = queue.pop(0)
+            if curr in signal_source_nodes:
+                return True
+            for other in comps:
+                if curr in other.nodes:
+                    for nxt in other.nodes:
+                        if nxt not in visited and not _is_power_node(nxt):
+                            visited.add(nxt)
+                            queue.append(nxt)
+        return False
+
+    def _has_unplaced_driver_to_node(node: str, exclude_inst: str) -> bool:
+        for other in comps:
+            if other.inst_name in used or other.inst_name == exclude_inst:
+                continue
+            if node not in other.nodes:
+                continue
+            if other.prefix in ("Q", "M", "J") and len(other.nodes) >= 3 and node in (other.nodes[0], other.nodes[2]):
+                return True
+            if other.prefix == "X" and len(other.nodes) == 5 and node == other.nodes[4]:
+                return True
+            if len(other.nodes) == 2 and "0" not in other.nodes and not any(_is_power_node(n) for n in other.nodes):
+                other_n = other.nodes[0] if other.nodes[1] == node else other.nodes[1]
+                if _can_reach_source_without_node(other_n, node):
+                    return True
+        return False
+
     # Walk remaining signal components, forming 2- or 3-resistor dividers, BJT stacks, Colpitts tanks, or RC/Zobel branches
     for c in comps:
         if c.inst_name in used:
             continue
+
+        # Antiparallel Diode Clipping Pair (`[D1, D2]`) placed at its signal node
+        if c.prefix == "D":
+            other_d = [
+                d for d in comps
+                if d.inst_name not in used and d.inst_name != c.inst_name and d.prefix == "D"
+                and set(d.nodes) == set(c.nodes)
+            ]
+            if other_d:
+                _record_col([c, other_d[0]])
+                continue
 
         # Defer emitter resistors of unplaced transistors so they are placed directly in the transistor stack
         if c.prefix == "R" and any(
@@ -1445,6 +1581,12 @@ def _group_into_functional_columns(comps: List[SpiceNetlistComponent]) -> List[L
                 _record_col([c, c_zob[0]])
                 continue
 
+        # Defer load resistors / termination shunts if there are still unplaced series/active components driving this node
+        if len(c.nodes) == 2 and "0" in c.nodes and not any(_is_power_node(n) for n in c.nodes):
+            live_n = c.nodes[0] if c.nodes[1] == "0" else c.nodes[1]
+            if _has_unplaced_driver_to_node(live_n, c.inst_name):
+                continue
+
         # Before placing a series passive (`CCV B KVAR`), place any unplaced shunt component (`X1 KVAR 0`) on the already-visited node!
         if len(c.nodes) == 2 and "0" not in c.nodes and not any(_is_power_node(n) for n in c.nodes):
             vis_n = [n for n in c.nodes if n in placed_nodes]
@@ -1453,11 +1595,17 @@ def _group_into_functional_columns(comps: List[SpiceNetlistComponent]) -> List[L
                     sh for sh in comps
                     if sh.inst_name not in used and sh.inst_name != c.inst_name
                     and len(sh.nodes) == 2 and vn in sh.nodes and "0" in sh.nodes
+                    and not _has_unplaced_driver_to_node(vn, sh.inst_name)
                 ]
                 for sh in shunts_vn:
                     _record_col([sh])
 
         _record_col([c])
+
+    # Final pass: place any deferred loads/shunts whose drivers have now been placed
+    for c in comps:
+        if c.inst_name not in used:
+            _record_col([c])
 
     # Append dedicated Power Supply & Decoupling column(s) at the end if separated earlier
     if has_power_bank and (power_supplies or decoupling_caps):
@@ -1561,7 +1709,7 @@ def _layout_style_a_textbook_wired(
                 op_c.symbol_type,
                 x=col_x + 144,
                 y=op_y,
-                value=op_c.value,
+                value="" if op_c.symbol_type.lower().endswith("universalopamp2") else op_c.value,
                 prefix="X",
                 allow_custom_symbol=True,
             )
@@ -1641,6 +1789,54 @@ def _layout_style_a_textbook_wired(
                 sch.ground_pin(rp.pin("bot"), stub_dy=32) if rn1 == "0" else sch.add_flag(rp.pin("bot"), rn1, stub_dy=32, stub_dx=32)
 
             col_x += 432 if rem_fb else 320
+            _mark_visited(col)
+            continue
+
+        # Case 4a: Full-Wave Diode Bridge Rectifier Leg (`[D_top, D_bot]`)
+        if len(col) == 2 and all(c.prefix == "D" for c in col) and len(set(col[0].nodes) & set(col[1].nodes)) == 1:
+            shared_set = set(col[0].nodes) & set(col[1].nodes)
+            ac_node = list(shared_set)[0]
+            d_cand_pos = [d for d in col if d.nodes[1] != ac_node]
+            d_cand_neg = [d for d in col if d.nodes[0] != ac_node]
+            if d_cand_pos and d_cand_neg:
+                d_top_c = d_cand_pos[0]
+                d_bot_c = d_cand_neg[0]
+                dc_pos = d_top_c.nodes[1]
+                dc_neg = d_bot_c.nodes[0]
+                d_top_p = sch.add_component(d_top_c.inst_name, "diode", x=col_x, y=240, value=d_top_c.value, orientation="R180", spice_line=d_top_c.spice_line)
+                d_bot_p = sch.add_component(d_bot_c.inst_name, "diode", x=col_x, y=400, value=d_bot_c.value, orientation="R180", spice_line=d_bot_c.spice_line)
+                sch.connect_points(d_top_p.pin("A"), d_bot_p.pin("K"))
+                sch.add_flag(d_top_p.pin("A"), ac_node, stub_dx=-32, stub_dy=0)
+                sch.add_flag(d_top_p.pin("K"), dc_pos, stub_dy=-32, stub_dx=32)
+                if dc_neg == "0":
+                    sch.ground_pin(d_bot_p.pin("A"), stub_dy=32)
+                else:
+                    sch.add_flag(d_bot_p.pin("A"), dc_neg, stub_dy=32, stub_dx=32)
+                col_x += 208
+                _mark_visited(col)
+                continue
+
+        # Case 4b: Antiparallel Diode Clipping Pair (`[D1, D2]`)
+        if len(col) == 2 and all(c.prefix == "D" for c in col) and len(set(col[0].nodes) & set(col[1].nodes)) == 2:
+            d1_c, d2_c = col[0], col[1]
+            if "0" in d1_c.nodes:
+                n_bot = "0"
+                n_top = d1_c.nodes[0] if d1_c.nodes[1] == "0" else d1_c.nodes[1]
+            else:
+                n_top, n_bot = d1_c.nodes[0], d1_c.nodes[1]
+
+            if d1_c.nodes[0] == n_top:
+                d_top_a, d_bot_a = d1_c, d2_c
+            else:
+                d_top_a, d_bot_a = d2_c, d1_c
+
+            d1_p = sch.add_component(d_top_a.inst_name, "diode", x=col_x, y=288, value=d_top_a.value, orientation="R0", spice_line=d_top_a.spice_line)
+            d2_p = sch.add_component(d_bot_a.inst_name, "diode", x=col_x + 96, y=352, value=d_bot_a.value, orientation="R180", spice_line=d_bot_a.spice_line)
+            sch.connect_points(d1_p.pin("A"), d2_p.pin("K"))
+            sch.connect_points(d1_p.pin("K"), d2_p.pin("A"))
+            sch.add_flag(d1_p.pin("A"), n_top, stub_dy=-32, stub_dx=32) if n_top != "0" else sch.ground_pin(d1_p.pin("A"), stub_dy=-32)
+            sch.ground_pin(d1_p.pin("K"), stub_dy=32) if n_bot == "0" else sch.add_flag(d1_p.pin("K"), n_bot, stub_dy=32, stub_dx=32)
+            col_x += 256
             _mark_visited(col)
             continue
 
