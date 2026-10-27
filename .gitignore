@@ -24,6 +24,7 @@ env/
 *.op.raw
 *.log.raw
 *.fft
+*.log
 *.tmp
 examples/out_demo*/
 

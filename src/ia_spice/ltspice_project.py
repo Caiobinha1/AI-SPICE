@@ -558,8 +558,13 @@ def parse_spice_netlist(path_or_text: str) -> SpiceNetlistProject:
             nodes = ["0" if n.upper() == "GND" else n for n in tokens[1:3]]
             val = " ".join(tokens[3:])
         elif prefix in ("Q", "J") and len(tokens) >= 5:
-            nodes = ["0" if n.upper() == "GND" else n for n in tokens[1:4]]
-            val = " ".join(tokens[4:])
+            # Handle both 3-terminal (Q C B E model) and 4-terminal substrate (Q C B E sub model)
+            if len(tokens) >= 6 and not any("=" in t for t in tokens[4:5]):
+                nodes = ["0" if n.upper() == "GND" else n for n in tokens[1:4]]
+                val = " ".join(tokens[5:])
+            else:
+                nodes = ["0" if n.upper() == "GND" else n for n in tokens[1:4]]
+                val = " ".join(tokens[4:])
         elif prefix == "M" and len(tokens) >= 6:
             nodes = ["0" if n.upper() == "GND" else n for n in tokens[1:5]]
             val = " ".join(tokens[5:])
@@ -1141,6 +1146,10 @@ def _group_into_functional_columns(comps: List[SpiceNetlistComponent]) -> List[L
                 and not any(_is_power_node(n) for n in sr.nodes)
             ]
             if not series_here:
+                # If cur_node is an active device node (e.g. Emitter in Common Base), don't consume its shunt here;
+                # let the transistor stage group RE directly under Q!
+                if cur_node in active_nodes:
+                    break
                 for sh in shunts_here:
                     columns.append([sh])
                     used.add(sh.inst_name)
@@ -1289,6 +1298,15 @@ def _group_into_functional_columns(comps: List[SpiceNetlistComponent]) -> List[L
         if c.inst_name in used:
             continue
 
+        # Defer emitter resistors of unplaced transistors so they are placed directly in the transistor stack
+        if c.prefix == "R" and any(
+            q.inst_name not in used and q.prefix in ("Q", "M", "J")
+            and len(q.nodes) >= 3 and q.nodes[2] in c.nodes
+            and not any(_is_power_node(n) for n in c.nodes)
+            for q in comps
+        ):
+            continue
+
         # 2- or 3-Resistor Voltage Divider (`R_top` from VCC -> mid -> [optional R_mid -> trim] -> R_bot -> 0)
         if c.prefix == "R" and (_is_power_node(c.nodes[0]) or _is_power_node(c.nodes[1])) and "0" not in c.nodes:
             mid_node = c.nodes[1] if _is_power_node(c.nodes[0]) else c.nodes[0]
@@ -1303,14 +1321,15 @@ def _group_into_functional_columns(comps: List[SpiceNetlistComponent]) -> List[L
                     and r.prefix == "R" and mid_node in r.nodes and "0" in r.nodes
                 ]
                 if r_bot:
-                    _record_col([c, r_bot[0]])
                     # Check for bypass capacitor on mid_node (e.g. `CB BIAS 0 10n`)
                     cb_list = [
                         cb for cb in comps
                         if cb.inst_name not in used and cb.prefix == "C" and mid_node in cb.nodes and "0" in cb.nodes
                     ]
-                    for cb in cb_list:
-                        _record_col([cb])
+                    if cb_list:
+                        _record_col([c, r_bot[0]] + cb_list)
+                    else:
+                        _record_col([c, r_bot[0]])
                     continue
 
                 # Check for 3-resistor divider chain (`RB4a` -> `RB4b` -> `RTRIM` -> `0`)
@@ -1382,8 +1401,6 @@ def _group_into_functional_columns(comps: List[SpiceNetlistComponent]) -> List[L
                     if re2_list:
                         col_stack.append(re2_list[0])
                         used.add(re2_list[0].inst_name)
-            _record_col(col_stack)
-
             # Check for Colpitts capacitive voltage divider (`C1` between `B` and `E`, `C2` between `E` and `0`)
             c1_colp = [
                 cc for cc in comps
@@ -1396,7 +1413,9 @@ def _group_into_functional_columns(comps: List[SpiceNetlistComponent]) -> List[L
                 and e_node in cc.nodes and "0" in cc.nodes
             ]
             if c1_colp and c2_colp:
+                _record_col(col_stack)
                 _record_col([c1_colp[0], c2_colp[0]])
+                continue
 
             # Check for Emitter Bypass Capacitor (`C_BYPASS` on `e_node` or `mid_enet` to `0`)
             for en_cand in ([mid_enet, e_node] if mid_enet else [e_node]):
@@ -1408,7 +1427,10 @@ def _group_into_functional_columns(comps: List[SpiceNetlistComponent]) -> List[L
                     and en_cand in cb.nodes and "0" in cb.nodes
                 ]
                 for cb in c_byp:
-                    _record_col([cb])
+                    col_stack.append(cb)
+                    used.add(cb.inst_name)
+                    placed_nodes.add(en_cand)
+            _record_col(col_stack)
             continue
 
         # Series R + C to Ground (e.g. RC filter `[RFILT, CFILT]` or Zobel network `[RZ, CZ]`)
@@ -1712,11 +1734,13 @@ def _layout_style_a_textbook_wired(
             _mark_visited(col)
             continue
 
-        # Case 7a: 2- or 3-Resistor Voltage Divider (`[R_top, R_bot]` or `[RB4a, RB4b, RTRIM]`) wired vertically
-        if len(col) in (2, 3) and all(c.prefix == "R" for c in col):
-            ys_div = [128, 384] if len(col) == 2 else [128, 320, 496]
+        # Case 7a: 2- or 3-Resistor Voltage Divider (`[R_top, R_bot]` or `[RB4a, RB4b, RTRIM]`), optionally with parallel CB
+        r_comps = [c for c in col if c.prefix == "R"]
+        c_byp_cb = [c for c in col if c.prefix == "C"]
+        if (len(r_comps) in (2, 3) and len(col) == len(r_comps) + len(c_byp_cb) and len(c_byp_cb) <= 1):
+            ys_div = [128, 384] if len(r_comps) == 2 else [128, 320, 496]
             placed_rs: List[Tuple[SpiceNetlistComponent, PlacedComponent]] = []
-            for idx_r, rc_item in enumerate(col):
+            for idx_r, rc_item in enumerate(r_comps):
                 rp = sch.add_component(rc_item.inst_name, "res", x=col_x, y=ys_div[idx_r], value=rc_item.value, spice_line=rc_item.spice_line)
                 placed_rs.append((rc_item, rp))
             r0_c, r0_p = placed_rs[0]
@@ -1734,7 +1758,15 @@ def _layout_style_a_textbook_wired(
                 cur_net = c_dn.nodes[1] if c_dn.nodes[0] == cur_net else c_dn.nodes[0]
             _, p_last = placed_rs[-1]
             sch.ground_pin(p_last.pin("bot"), stub_dy=32) if cur_net == "0" else sch.add_flag(p_last.pin("bot"), cur_net, stub_dy=32, stub_dx=32)
-            col_x += 224
+
+            if c_byp_cb:
+                cb_c = c_byp_cb[0]
+                cb_p = sch.add_component(cb_c.inst_name, "cap", x=col_x + 96, y=400, value=cb_c.value, orientation="R0", spice_line=cb_c.spice_line)
+                sch.connect_points((p_last.pin("top")[0], 400), cb_p.pin("top"), vh_order="HV")
+                sch.ground_pin(cb_p.pin("bot"), stub_dy=32)
+                col_x += 256
+            else:
+                col_x += 224
             _mark_visited(col)
             continue
 
@@ -1756,7 +1788,7 @@ def _layout_style_a_textbook_wired(
             _mark_visited(col)
             continue
 
-        # Case 8: Single BJT / MOSFET / JFET vertical stack `[optional RC/RD, Q/M/J, optional RE1/RS1, optional RE2/RS2]`
+        # Case 8: Single BJT / MOSFET / JFET vertical stack `[optional RC/RD, Q/M/J, optional RE1/RS1, optional RE2/RS2, optional CE]`
         if any(c.prefix in ("Q", "M", "J") for c in col):
             q_c = next(c for c in col if c.prefix in ("Q", "M", "J"))
             rx_off = 48 if q_c.prefix == "Q" else 32
@@ -1778,6 +1810,8 @@ def _layout_style_a_textbook_wired(
                 sch.power_pin(q_placed.pin("C"), c_node, stub_dy=-32, stub_dx=32)
 
             re_items = [c for c in col if c.prefix == "R" and col.index(c) > col.index(q_c)]
+            ce_items = [c for c in col if c.prefix == "C"]
+
             if len(re_items) == 1:
                 re1_c = re_items[0]
                 re1_p = sch.add_component(re1_c.inst_name, "res", x=col_x + rx_off, y=400, value=re1_c.value, spice_line=re1_c.spice_line)
@@ -1786,6 +1820,15 @@ def _layout_style_a_textbook_wired(
                 net_y_hint[e_node] = 368
                 bot_net = re1_c.nodes[1] if re1_c.nodes[0] == e_node else re1_c.nodes[0]
                 sch.ground_pin(re1_p.pin("bot"), stub_dy=32) if bot_net == "0" else sch.add_flag(re1_p.pin("bot"), bot_net, stub_dy=32, stub_dx=32)
+
+                if ce_items:
+                    ce_c = ce_items[0]
+                    ce_p = sch.add_component(ce_c.inst_name, "cap", x=col_x + rx_off + 96, y=416, value=ce_c.value, orientation="R0", spice_line=ce_c.spice_line)
+                    sch.add_wire(re1_p.pin("top")[0], 416, ce_p.pin("top")[0], 416)
+                    sch.ground_pin(ce_p.pin("bot"), stub_dy=32)
+                    col_x += 304
+                else:
+                    col_x += 256
             elif len(re_items) >= 2:
                 re1_c, re2_c = re_items[0], re_items[1]
                 re1_p = sch.add_component(re1_c.inst_name, "res", x=col_x + rx_off, y=384, value=re1_c.value, spice_line=re1_c.spice_line)
@@ -1799,10 +1842,18 @@ def _layout_style_a_textbook_wired(
                 net_y_hint[mid_enet] = 528
                 bot_net = re2_c.nodes[1] if re2_c.nodes[0] == mid_enet else re2_c.nodes[0]
                 sch.ground_pin(re2_p.pin("bot"), stub_dy=32) if bot_net == "0" else sch.add_flag(re2_p.pin("bot"), bot_net, stub_dy=32, stub_dx=32)
+
+                if ce_items:
+                    ce_c = ce_items[0]
+                    ce_p = sch.add_component(ce_c.inst_name, "cap", x=col_x + rx_off + 96, y=576, value=ce_c.value, orientation="R0", spice_line=ce_c.spice_line)
+                    sch.add_wire(re2_p.pin("top")[0], 576, ce_p.pin("top")[0], 576)
+                    sch.ground_pin(ce_p.pin("bot"), stub_dy=32)
+                    col_x += 304
+                else:
+                    col_x += 256
             else:
                 sch.ground_pin(q_placed.pin("E"), stub_dy=32) if e_node == "0" else sch.add_flag(q_placed.pin("E"), e_node, stub_dy=32, stub_dx=32)
-
-            col_x += 256
+                col_x += 256
             _mark_visited(col)
             continue
 
@@ -1815,9 +1866,26 @@ def _layout_style_a_textbook_wired(
             else:
                 left_net, right_net = c.nodes[0], c.nodes[1]
 
-            if c.prefix == "L" and net_y_hint.get(left_net) == 288:
-                y_ser = 272  # Aligns L1 pins at y=288 with BIAS (288) and Q1.Base (288)!
-            elif net_y_hint.get(left_net) == 240:
+            hint_l = net_y_hint.get(left_net)
+            hint_r = net_y_hint.get(right_net)
+            if hint_l is None and hint_r is None:
+                # Lookahead to downstream transistor terminals
+                if any(q.prefix in ("Q", "M", "J") and len(q.nodes) >= 3 and q.nodes[1] == right_net for q in comps):
+                    hint_r = 288
+                elif any(q.prefix in ("Q", "M", "J") and len(q.nodes) >= 3 and q.nodes[2] == right_net for q in comps):
+                    hint_r = 368
+                elif any(q.prefix in ("Q", "M", "J") and len(q.nodes) >= 3 and q.nodes[0] == left_net for q in comps):
+                    hint_l = 224
+                elif any(q.prefix in ("Q", "M", "J") and len(q.nodes) >= 3 and q.nodes[2] == left_net for q in comps):
+                    hint_l = 368
+
+            if hint_l == 224 or hint_r == 224:
+                y_ser = 208  # Aligns R90 cap pins at y=224 with Collector line!
+            elif hint_l == 368 or hint_r == 368:
+                y_ser = 352  # Aligns R90 cap pins at y=368 with Emitter line!
+            elif hint_l == 288 or hint_r == 288:
+                y_ser = 272  # Aligns R90 cap pins at y=288 with Base line!
+            elif hint_l == 240 or hint_r == 240:
                 y_ser = 224  # Aligns RISO pins at y=240 with RFILT (240)!
             else:
                 y_ser = 192  # Standard coupling height (pins at y=208)
@@ -1835,6 +1903,7 @@ def _layout_style_a_textbook_wired(
             sch.add_flag(cp.pin("left"), left_net, stub_dx=-32, stub_dy=0)
             sch.add_flag(cp.pin("right"), right_net, stub_dx=32, stub_dy=0)
             net_y_hint[right_net] = y_ser + 16
+            net_y_hint[left_net] = y_ser + 16
             col_x += 224
         else:
             # Ensure ground is always at the bottom (`n1 == "0"`) for shunt passives
@@ -1844,10 +1913,31 @@ def _layout_style_a_textbook_wired(
                 n0, n1 = c.nodes[0], c.nodes[1]
 
             hint_y = net_y_hint.get(n0)
-            if c.prefix == "C" and n1 == "0" and hint_y == 528:
+            if c.prefix == "V":
+                # Lookahead if VIN drives CIN which connects to Base (288) or Emitter (368)
+                cin_cand = [cp for cp in comps if cp.prefix == "C" and n0 in cp.nodes]
+                is_to_base = cin_cand and any(
+                    q.prefix in ("Q", "M", "J") and len(q.nodes) >= 3 and q.nodes[1] in cin_cand[0].nodes
+                    for q in comps
+                )
+                is_to_emit = cin_cand and any(
+                    q.prefix in ("Q", "M", "J") and len(q.nodes) >= 3 and q.nodes[2] in cin_cand[0].nodes
+                    for q in comps
+                )
+                if is_to_emit or hint_y == 368:
+                    y_shunt = 352
+                    net_y_hint[n0] = 368
+                else:
+                    y_shunt = 272
+                    net_y_hint[n0] = 288
+            elif hint_y == 224:
+                y_shunt = 208  # Aligns RLOAD top pin at 208 + 16 = 224 (Collector line!)
+            elif hint_y == 368:
+                y_shunt = 352  # Aligns RLOAD top pin at 352 + 16 = 368 (Emitter line!)
+            elif hint_y == 288:
+                y_shunt = 272  # Aligns shunt top pin at 272 + 16 = 288
+            elif c.prefix == "C" and n1 == "0" and hint_y == 528:
                 y_shunt = 560  # Aligns C_BYPASS top riser (-32) directly with E2_MID at y=528!
-            elif c.prefix == "C" and n1 == "0" and hint_y == 288:
-                y_shunt = 320  # Aligns CB top riser (-32) directly with BIAS at y=288!
             else:
                 y_shunt = 288
 
@@ -1861,7 +1951,10 @@ def _layout_style_a_textbook_wired(
                 spice_line=c.spice_line,
                 prefix="X" if c.prefix == "X" else None,
             )
-            sch.power_pin(p.pin("top"), n0, stub_dy=-32, stub_dx=32) if n0 != "0" else sch.ground_pin(p.pin("top"), stub_dy=-32)
+            if c.prefix == "V" and n0 != "0":
+                sch.add_flag(p.pin("top"), n0, stub_dx=32, stub_dy=0)
+            else:
+                sch.power_pin(p.pin("top"), n0, stub_dy=-32, stub_dx=32) if n0 != "0" else sch.ground_pin(p.pin("top"), stub_dy=-32)
             sch.ground_pin(p.pin("bot"), stub_dy=32) if n1 == "0" else sch.add_flag(p.pin("bot"), n1, stub_dy=32, stub_dx=32)
             col_x += 208
         _mark_visited(col)
@@ -1921,8 +2014,10 @@ def _layout_style_b_power_rail_bus(
             col_x += 224
             continue
 
-        if len(col) == 2 and all(c.prefix == "R" for c in col):
-            r_top_c, r_bot_c = col[0], col[1]
+        r_divs = [c for c in col if c.prefix == "R"]
+        c_divs = [c for c in col if c.prefix == "C"]
+        if len(r_divs) == 2 and len(col) == 2 + len(c_divs) and len(c_divs) <= 1:
+            r_top_c, r_bot_c = r_divs[0], r_divs[1]
             r_top = sch.add_component(r_top_c.inst_name, "res", x=col_x, y=112, value=r_top_c.value)
             r_bot = sch.add_component(r_bot_c.inst_name, "res", x=col_x, y=368, value=r_bot_c.value)
             _connect_top_pin(r_top.pin("top"), r_top_c.nodes[0])
@@ -1930,7 +2025,14 @@ def _layout_style_b_power_rail_bus(
             mid_y = ((r_top.pin("bot")[1] + r_bot.pin("top")[1]) // 32) * 16
             sch.add_flag((r_top.pin("bot")[0], mid_y), r_top_c.nodes[1], stub_dx=32, stub_dy=0)
             sch.ground_pin(r_bot.pin("bot"), stub_dy=32)
-            col_x += 208
+            if c_divs:
+                cb_c = c_divs[0]
+                cb_p = sch.add_component(cb_c.inst_name, "cap", x=col_x + 96, y=384, value=cb_c.value, orientation="R0")
+                sch.connect_points((r_bot.pin("top")[0], 384), cb_p.pin("top"), vh_order="HV")
+                sch.ground_pin(cb_p.pin("bot"), stub_dy=32)
+                col_x += 256
+            else:
+                col_x += 208
             continue
 
         if any(c.prefix == "Q" for c in col):
@@ -1951,12 +2053,21 @@ def _layout_style_b_power_rail_bus(
                 _connect_top_pin(q_placed.pin("C"), c_node)
 
             re_items = [c for c in col if c.prefix == "R" and col.index(c) > col.index(q_c)]
+            ce_items = [c for c in col if c.prefix == "C"]
             if len(re_items) == 1:
                 re1_c = re_items[0]
                 re1_p = sch.add_component(re1_c.inst_name, "res", x=col_x + 48, y=400, value=re1_c.value)
                 sch.connect_points(q_placed.pin("E"), re1_p.pin("top"))
                 sch.add_flag((q_placed.pin("E")[0], 368), e_node, stub_dx=48, stub_dy=0)
                 sch.ground_pin(re1_p.pin("bot"), stub_dy=32)
+                if ce_items:
+                    ce_c = ce_items[0]
+                    ce_p = sch.add_component(ce_c.inst_name, "cap", x=col_x + 48 + 96, y=416, value=ce_c.value, orientation="R0")
+                    sch.add_wire(re1_p.pin("top")[0], 416, ce_p.pin("top")[0], 416)
+                    sch.ground_pin(ce_p.pin("bot"), stub_dy=32)
+                    col_x += 304
+                else:
+                    col_x += 256
             elif len(re_items) >= 2:
                 re1_c, re2_c = re_items[0], re_items[1]
                 re1_p = sch.add_component(re1_c.inst_name, "res", x=col_x + 48, y=384, value=re1_c.value)
@@ -1967,7 +2078,16 @@ def _layout_style_b_power_rail_bus(
                 mid_enet = re1_c.nodes[1] if re1_c.nodes[0] == e_node else re1_c.nodes[0]
                 sch.add_flag((re1_p.pin("bot")[0], 528), mid_enet, stub_dx=48, stub_dy=0)
                 sch.ground_pin(re2_p.pin("bot"), stub_dy=32)
-            col_x += 256
+                if ce_items:
+                    ce_c = ce_items[0]
+                    ce_p = sch.add_component(ce_c.inst_name, "cap", x=col_x + 48 + 96, y=576, value=ce_c.value, orientation="R0")
+                    sch.add_wire(re2_p.pin("top")[0], 576, ce_p.pin("top")[0], 576)
+                    sch.ground_pin(ce_p.pin("bot"), stub_dy=32)
+                    col_x += 304
+                else:
+                    col_x += 256
+            else:
+                col_x += 256
             continue
 
         c = col[0]

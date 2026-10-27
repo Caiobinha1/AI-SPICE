@@ -127,6 +127,9 @@ Generating valid LTspice `.asc` schematics programmatically is notoriously diffi
    - Shunt passives to ground are oriented **vertically (`R0`)**.
    - Multi-resistor bias dividers (`2-` or `3-resistor` chains), capacitive dividers, diode bias strings, and complementary push-pull stages (`NPN` + mirrored `M180 PNP`) are stacked vertically on aligned column axes.
    - Multi-pin Op-Amp subcircuits (`Prefix X`) are placed with their local feedback and frequency-compensation networks structured directly beneath each stage.
+   - **Topology-Aware Active Stage Layouts (CE, CC, CB)**:
+     - Automatically synthesizes parallel bypass branches (e.g. $R_E \parallel C_E$ in Common Emitter, $R_2 \parallel C_B$ in Common Base) placed side-by-side ($dx = 96\text{ px}$) with single horizontal bridging wires.
+     - Aligns input stimuli and output taps collinearly along active device signal pins: Base ($y = 288$), Collector ($y = 224$), or Emitter ($y = 368$), producing straight horizontal paths with zero doglegs across all three configurations.
 3. **100% Orthogonal Manhattan Signal Wiring (`wire_signal_nets_on_schematic`)**:
    - Connects all non-power signal, bias, and feedback nets using physical orthogonal `WIRE` segments on the 16-pixel grid (`NC_ = 0`), retaining a single clean net label per continuous wire.
    - Enforces protective bounding boxes around component bodies, symbol text, and power flags so routed wires never cause accidental short circuits or visual overlaps.

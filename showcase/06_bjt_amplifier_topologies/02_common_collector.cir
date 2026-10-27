@@ -1,0 +1,22 @@
+* Textbook Common Collector (CC / Emitter Follower) BJT Amplifier
+* Low output impedance buffer with near-unity voltage gain (Av ~ 0.99 V/V)
+VIN IN 0 SINE(0 100m 1k)
+CIN B IN 10u
+R1 VCC B 33k
+R2 B 0 33k
+Q1 VCC B E 0 2N2222
+RE E 0 1k
+COUT OUT E 10u
+RLOAD OUT 0 1k
+VCC VCC 0 12
+.model 2N2222 NPN(IS=1E-14 BF=150 VAF=100)
+.tran 0 5m 0 1u
+.meas TRAN vin_max MAX V(IN) FROM=3m TO=5m
+.meas TRAN vin_min MIN V(IN) FROM=3m TO=5m
+.meas TRAN vout_max MAX V(OUT) FROM=3m TO=5m
+.meas TRAN vout_min MIN V(OUT) FROM=3m TO=5m
+.meas TRAN vin_pp PARAM (vin_max - vin_min)
+.meas TRAN vout_pp PARAM (vout_max - vout_min)
+.meas TRAN gain_vv PARAM (vout_pp / vin_pp)
+.meas TRAN gain_db PARAM 20*log10(gain_vv)
+.end

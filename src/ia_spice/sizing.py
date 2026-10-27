@@ -189,11 +189,11 @@ def size_bjt_OperatingPoint(
     beta: float = 100.0,
     v_be: float = 0.70,
     v_t: float = 0.026,
-    topology: str = "CE",  # "CE" (Common Emitter) or "CC" (Emitter Follower)
+    topology: str = "CE",  # "CE" (Common Emitter), "CC" (Emitter Follower), or "CB" (Common Base)
 ) -> BJTOperatingPointResult:
     """
     Compute exact analytical DC operating point and small-signal AC parameters for a BJT stage
-    (Common-Emitter with full/partial degeneration, or Common-Collector Emitter Follower).
+    (Common-Emitter with full/partial degeneration, Common-Collector Emitter Follower, or Common-Base).
     """
     v_th = v_cc * (r2 / (r1 + r2))
     r_th = (r1 * r2) / (r1 + r2)
@@ -222,16 +222,24 @@ def size_bjt_OperatingPoint(
 
     r_e_ac = r_e_dc if r_e_rf_unbypassed is None else r_e_rf_unbypassed
 
-    if topology.upper() == "CC":
+    top_clean = topology.upper()
+    if top_clean == "CC":
         r_e_eff = (r_e_dc * r_load_ac) / (r_e_dc + r_load_ac) if r_load_ac else r_e_dc
         z_in_base = (beta + 1.0) * (r_e_int + r_e_eff)
+        z_in_stage = 1.0 / (1.0 / r_th + 1.0 / z_in_base)
         av = r_e_eff / (r_e_int + r_e_eff)
+    elif top_clean == "CB":
+        r_c_eff = (r_c * r_load_ac) / (r_c + r_load_ac) if (r_load_ac and r_c > 0) else r_c
+        z_in_emitter = r_e_int
+        z_in_stage = (r_e_dc * z_in_emitter) / (r_e_dc + z_in_emitter) if r_e_dc > 0 else z_in_emitter
+        z_in_base = r_pi
+        av = r_c_eff / r_e_int
     else:
         z_in_base = (beta + 1.0) * (r_e_int + r_e_ac)
         r_c_eff = (r_c * r_load_ac) / (r_c + r_load_ac) if (r_load_ac and r_c > 0) else r_c
+        z_in_stage = 1.0 / (1.0 / r_th + 1.0 / z_in_base)
         av = -r_c_eff / (r_e_int + r_e_ac)
 
-    z_in_stage = 1.0 / (1.0 / r_th + 1.0 / z_in_base)
     i_div = (v_cc - v_b) / r1
     p_dc = v_cc * (i_c + i_div)
 
