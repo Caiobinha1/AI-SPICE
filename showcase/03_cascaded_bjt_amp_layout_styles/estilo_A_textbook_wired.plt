@@ -1,10 +1,13 @@
+; Plot Settings for 2-Stage Cascaded BJT Amp
 [Transient Analysis]
 {
-   Npanes: 1
-   {
-      axes: 2
-      traces: 1 {524290,0,"V(IN)"}
-      traces: 1 {524290,0,"V(C1)"}
-      traces: 1 {524290,0,"V(OUT)"}
-   }
+  "Plots": [
+    {
+      "Signals": [
+        "V(in)",
+        "V(c1)",
+        "V(out)"
+      ]
+    }
+  ]
 }
